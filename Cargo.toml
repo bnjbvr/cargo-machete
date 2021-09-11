@@ -1,0 +1,47 @@
+[package]
+name = "brute-udeps"
+edition = "2018"
+version = "0.1.0"
+authors = []
+keywords = []
+categories = []
+autobins = true
+autoexamples = true
+autotests = true
+autobenches = true
+publish = true
+
+[dependencies]
+cargo_toml = "0.10.0"
+grep = "0.2.8"
+log = "0.4.14"
+pretty_env_logger = "0.4.0"
+toml = "0.5.8"
+walkdir = "2.3.2"
+
+[dev-dependencies]
+
+[build-dependencies]
+
+[target]
+
+[features]
+
+[patch]
+
+[profile]
+[badges.maintenance]
+status = "none"
+
+[[bin]]
+path = "src/main.rs"
+name = "cargo-brute-udeps"
+test = true
+doctest = true
+bench = true
+doc = true
+plugin = false
+proc-macro = false
+harness = true
+edition = "2018"
+required-features = []
