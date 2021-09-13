@@ -38,13 +38,14 @@ fn handle_one(manifest_path: PathBuf, fix: bool) -> Result<(), BoxedError> {
     let mut to_remove = Vec::new();
 
     for (name, _) in manifest.dependencies.iter() {
-        let snaked = to_snake_case(&name) + "::";
+        let snaked = to_snake_case(&name);
+        let pattern = format!("use {}(::|;| as)?|{}::|extern crate {}", snaked, snaked, snaked);
         info!(
             "looking for {} in {}",
-            snaked,
+            pattern,
             manifest_path.to_string_lossy()
         );
-        match search(dir_path.clone(), &snaked) {
+        match search(dir_path.clone(), &pattern) {
             Ok(found) => {
                 if !found {
                     info!("remove {}", name);
