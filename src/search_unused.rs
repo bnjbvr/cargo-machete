@@ -1,4 +1,4 @@
-use std::{error, path::PathBuf};
+use std::{collections::HashSet, error, path::PathBuf};
 
 use grep::{
     regex::RegexMatcher,
@@ -25,6 +25,29 @@ pub(crate) fn find_unused(manifest_path: &PathBuf) -> anyhow::Result<Option<Pack
 
     let mut analysis = PackageAnalysis::new(package_name.clone(), manifest);
 
+    let mut paths = HashSet::new();
+    if let Some(path) = analysis
+        .manifest
+        .lib
+        .as_ref()
+        .and_then(|lib| lib.path.as_ref())
+    {
+        paths.insert(path.clone());
+    }
+
+    for product in analysis
+        .manifest
+        .bin
+        .iter()
+        .chain(analysis.manifest.bench.iter())
+        .chain(analysis.manifest.test.iter())
+        .chain(analysis.manifest.example.iter())
+    {
+        if let Some(ref path) = product.path {
+            paths.insert(path.clone());
+        }
+    }
+
     for (name, _) in analysis.manifest.dependencies.iter() {
         let snaked = name.replace('-', "_");
 
@@ -36,21 +59,28 @@ pub(crate) fn find_unused(manifest_path: &PathBuf) -> anyhow::Result<Option<Pack
             snaked = snaked
         );
 
-        trace!(
-            "looking for {} in {}",
-            pattern,
-            manifest_path.to_string_lossy()
-        );
+        let mut found_once = false;
+        for path in &paths {
+            let mut path = dir_path.join(path);
+            // Remove the .rs suffix.
+            path.pop();
 
-        let found = match search(dir_path.clone(), &pattern) {
-            Ok(found) => found,
-            Err(err) => {
-                analysis.errors.push(err);
-                continue;
-            }
-        };
+            trace!("looking for {} in {}", pattern, path.to_string_lossy(),);
+            match search(dir_path.join(path), &pattern) {
+                Ok(found) => {
+                    if found {
+                        found_once = true;
+                        break;
+                    }
+                }
+                Err(err) => {
+                    analysis.errors.push(err);
+                    continue;
+                }
+            };
+        }
 
-        if !found {
+        if !found_once {
             debug!("{} might be unused", name);
             analysis.unused.push(name.clone());
         }
@@ -79,8 +109,10 @@ impl grep::searcher::Sink for StopAfterFirstMatch {
     ) -> Result<bool, Self::Error> {
         let mat = String::from_utf8(mat.bytes().to_vec())?;
         let mat = mat.trim();
+
         if mat.starts_with("//") || mat.starts_with("//!") {
             // Continue if seeing a comment or doc comment.
+            // TODO do something smarter! what about multiline strings containing //, etc.
             return Ok(true);
         }
 
@@ -100,18 +132,19 @@ fn search(path: PathBuf, text: &str) -> anyhow::Result<bool> {
         .build();
 
     for result in WalkDir::new(path) {
-        let dent = match result {
-            Ok(dent) => dent,
+        let dir_entry = match result {
+            Ok(dir_entry) => dir_entry,
             Err(err) => {
                 eprintln!("{}", err);
                 continue;
             }
         };
 
-        if !dent.file_type().is_file() {
+        if !dir_entry.file_type().is_file() {
             continue;
         }
-        if dent
+
+        if dir_entry
             .path()
             .extension()
             .map_or(true, |ext| ext.to_string_lossy() != "rs")
@@ -120,10 +153,10 @@ fn search(path: PathBuf, text: &str) -> anyhow::Result<bool> {
         }
 
         let mut sink = StopAfterFirstMatch::new();
-        let result = searcher.search_path(&matcher, dent.path(), &mut sink);
+        let result = searcher.search_path(&matcher, dir_entry.path(), &mut sink);
 
         if let Err(err) = result {
-            eprintln!("{}: {}", dent.path().display(), err);
+            eprintln!("{}: {}", dir_entry.path().display(), err);
         }
 
         if sink.found {
@@ -132,4 +165,30 @@ fn search(path: PathBuf, text: &str) -> anyhow::Result<bool> {
     }
 
     Ok(false)
+}
+
+#[cfg(test)]
+const TOP_LEVEL: &str = concat!(env!("CARGO_MANIFEST_DIR"));
+
+#[test]
+fn test_transitively_unused() -> anyhow::Result<()> {
+    // lib1 has zero dependencies
+    let analysis =
+        find_unused(&PathBuf::from(TOP_LEVEL).join("./test_cases/unused-transitive/lib1/Cargo.toml"))?
+            .expect("no error during processing");
+    assert!(analysis.unused.is_empty());
+
+    // lib2 effectively uses lib1
+    let analysis =
+        find_unused(&PathBuf::from(TOP_LEVEL).join("./test_cases/unused-transitive/lib2/Cargo.toml"))?
+            .expect("no error during processing");
+    assert!(analysis.unused.is_empty());
+
+    // but top level references both lib1 and lib2, and only uses lib2
+    let analysis =
+        find_unused(&PathBuf::from(TOP_LEVEL).join("./test_cases/unused-transitive/Cargo.toml"))?
+            .expect("no error during processing");
+    assert_eq!(analysis.unused, &["lib1".to_string()]);
+
+    Ok(())
 }
