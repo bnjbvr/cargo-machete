@@ -171,17 +171,19 @@ fn search(path: PathBuf, text: &str) -> anyhow::Result<bool> {
 const TOP_LEVEL: &str = concat!(env!("CARGO_MANIFEST_DIR"));
 
 #[test]
-fn test_transitively_unused() -> anyhow::Result<()> {
+fn test_unused_transitive() -> anyhow::Result<()> {
     // lib1 has zero dependencies
-    let analysis =
-        find_unused(&PathBuf::from(TOP_LEVEL).join("./test_cases/unused-transitive/lib1/Cargo.toml"))?
-            .expect("no error during processing");
+    let analysis = find_unused(
+        &PathBuf::from(TOP_LEVEL).join("./test_cases/unused-transitive/lib1/Cargo.toml"),
+    )?
+    .expect("no error during processing");
     assert!(analysis.unused.is_empty());
 
     // lib2 effectively uses lib1
-    let analysis =
-        find_unused(&PathBuf::from(TOP_LEVEL).join("./test_cases/unused-transitive/lib2/Cargo.toml"))?
-            .expect("no error during processing");
+    let analysis = find_unused(
+        &PathBuf::from(TOP_LEVEL).join("./test_cases/unused-transitive/lib2/Cargo.toml"),
+    )?
+    .expect("no error during processing");
     assert!(analysis.unused.is_empty());
 
     // but top level references both lib1 and lib2, and only uses lib2
@@ -189,6 +191,18 @@ fn test_transitively_unused() -> anyhow::Result<()> {
         find_unused(&PathBuf::from(TOP_LEVEL).join("./test_cases/unused-transitive/Cargo.toml"))?
             .expect("no error during processing");
     assert_eq!(analysis.unused, &["lib1".to_string()]);
+
+    Ok(())
+}
+
+#[test]
+fn test_macro_use() -> anyhow::Result<()> {
+    // when a lib uses a dependency via a macro, there's no way we can find it by scanning the
+    // source code.
+    let analysis =
+        find_unused(&PathBuf::from(TOP_LEVEL).join("./test_cases/false-positive-log/Cargo.toml"))?
+            .expect("no error during processing");
+    assert_eq!(analysis.unused, &["log".to_string()]);
 
     Ok(())
 }
