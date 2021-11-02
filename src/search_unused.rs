@@ -48,6 +48,8 @@ pub(crate) fn find_unused(manifest_path: &PathBuf) -> anyhow::Result<Option<Pack
         }
     }
 
+    // TODO extend to dev dependencies + build dependencies, and be smarter in the grouping of
+    // searched paths
     for (name, _) in analysis.manifest.dependencies.iter() {
         let snaked = name.replace('-', "_");
 
