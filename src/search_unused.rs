@@ -171,6 +171,18 @@ fn search(path: PathBuf, text: &str) -> anyhow::Result<bool> {
 const TOP_LEVEL: &str = concat!(env!("CARGO_MANIFEST_DIR"));
 
 #[test]
+fn test_just_unused() -> anyhow::Result<()> {
+    // a crate that simply does not use a dependency it refers to
+    let analysis = find_unused(
+        &PathBuf::from(TOP_LEVEL).join("./test_cases/just-unused/Cargo.toml"),
+    )?
+    .expect("no error during processing");
+    assert_eq!(analysis.unused, &["log".to_string()]);
+
+    Ok(())
+}
+
+#[test]
 fn test_unused_transitive() -> anyhow::Result<()> {
     // lib1 has zero dependencies
     let analysis = find_unused(
