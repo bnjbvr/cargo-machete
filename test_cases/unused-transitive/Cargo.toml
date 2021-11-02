@@ -1,0 +1,10 @@
+[package]
+name = "udeps-test-case"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+lib1 = { path = "./lib1" }
+lib2 = { path = "./lib2" }
