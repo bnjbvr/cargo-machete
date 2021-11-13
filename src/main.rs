@@ -108,7 +108,8 @@ fn main() -> anyhow::Result<()> {
                         compare_with_cargo_udeps(&mut analysis)?;
                     }
 
-                    println!("{} -- found unused dependencies:", analysis.package_name);
+                    println!("{} -- {}:", analysis.package_name, path.to_string_lossy());
+
                     for dep in &analysis.unused {
                         println!("\t{}", dep)
                     }

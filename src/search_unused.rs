@@ -6,12 +6,23 @@ use std::{
 
 use grep::{
     regex::RegexMatcher,
-    searcher::{BinaryDetection, SearcherBuilder},
+    searcher::{BinaryDetection, Searcher, SearcherBuilder},
 };
 use log::{debug, trace};
 use walkdir::WalkDir;
 
 use crate::PackageAnalysis;
+
+fn make_regexp(crate_name: &str) -> String {
+    // Breaking down this regular expression:
+    // - `use {name}(::|;| as)`: matches `use foo;`, `use foo::bar`, `use foo as bar;`.
+    // - `(^|\\W)({name})::`: matches `foo::X`, but not `barfoo::X`.
+    // - `extern crate {name}( |;)`: matches `extern crate foo`, or `extern crate foo as bar`.
+    format!(
+        "use {name}(::|;| as)|(^|\\W)({name})::|extern crate {name}( |;)",
+        name = crate_name
+    )
+}
 
 pub(crate) fn find_unused(manifest_path: &Path) -> anyhow::Result<Option<PackageAnalysis>> {
     let mut dir_path = manifest_path.to_path_buf();
@@ -57,13 +68,7 @@ pub(crate) fn find_unused(manifest_path: &Path) -> anyhow::Result<Option<Package
     for (name, _) in analysis.manifest.dependencies.iter() {
         let snaked = name.replace('-', "_");
 
-        // Look for:
-        // use X:: / use X; / use X as / X:: / extern crate X;
-        // TODO X:: could be YX::
-        let pattern = format!(
-            "use {snaked}(::|;| as)?|{snaked}::|extern crate {snaked}( |;)",
-            snaked = snaked
-        );
+        let pattern = make_regexp(&snaked);
 
         let mut found_once = false;
         for path in &paths {
@@ -129,6 +134,58 @@ impl grep::searcher::Sink for StopAfterFirstMatch {
     }
 }
 
+enum SearchOneResult {
+    Found(bool),
+    Error(Box<dyn std::error::Error>),
+}
+
+trait Searchable {
+    fn search(
+        &self,
+        matcher: &RegexMatcher,
+        searcher: &mut Searcher,
+        sink: &mut StopAfterFirstMatch,
+    ) -> Result<(), Box<dyn error::Error>>;
+}
+
+impl Searchable for &str {
+    #[inline]
+    fn search(
+        &self,
+        matcher: &RegexMatcher,
+        searcher: &mut Searcher,
+        sink: &mut StopAfterFirstMatch,
+    ) -> Result<(), Box<dyn error::Error>> {
+        searcher.search_reader(matcher, self.as_bytes(), sink)
+    }
+}
+
+impl Searchable for &Path {
+    #[inline]
+    fn search(
+        &self,
+        matcher: &RegexMatcher,
+        searcher: &mut Searcher,
+        sink: &mut StopAfterFirstMatch,
+    ) -> Result<(), Box<dyn error::Error>> {
+        searcher.search_path(matcher, self, sink)
+    }
+}
+
+#[inline]
+fn search_one<S: Searchable>(
+    searcher: &mut Searcher,
+    matcher: &RegexMatcher,
+    searchable: S,
+) -> SearchOneResult {
+    let mut sink = StopAfterFirstMatch::new();
+    if let Err(err) = searchable.search(matcher, searcher, &mut sink) {
+        SearchOneResult::Error(err)
+    } else {
+        SearchOneResult::Found(sink.found)
+    }
+}
+
 fn search(path: PathBuf, text: &str) -> anyhow::Result<bool> {
     let matcher = RegexMatcher::new_line_matcher(text)?;
 
@@ -158,19 +215,54 @@ fn search(path: PathBuf, text: &str) -> anyhow::Result<bool> {
             continue;
         }
 
-        let mut sink = StopAfterFirstMatch::new();
-        let result = searcher.search_path(&matcher, dir_entry.path(), &mut sink);
-
-        if let Err(err) = result {
-            eprintln!("{}: {}", dir_entry.path().display(), err);
-        }
-
-        if sink.found {
-            return Ok(true);
+        match search_one(&mut searcher, &matcher, dir_entry.path()) {
+            SearchOneResult::Found(found) => {
+                if found {
+                    return Ok(true);
+                }
+            }
+            SearchOneResult::Error(err) => {
+                eprintln!("{}: {}", dir_entry.path().display(), err);
+            }
         }
     }
 
     Ok(false)
+}
+
+#[test]
+fn test_regexp() -> anyhow::Result<()> {
+    fn test_one(crate_name: &str, content: &str) -> anyhow::Result<bool> {
+        let matcher = RegexMatcher::new_line_matcher(&make_regexp(crate_name))?;
+
+        let mut searcher = SearcherBuilder::new()
+            .binary_detection(BinaryDetection::quit(b'\x00'))
+            .line_number(false)
+            .build();
+
+        if let SearchOneResult::Found(val) = search_one(&mut searcher, &matcher, content) {
+            Ok(val)
+        } else {
+            unreachable!()
+        }
+    }
+
+    assert!(!test_one("log", "use da_force_luke;")?);
+    assert!(!test_one("log", "use flog;")?);
+    assert!(!test_one("log", "use log_once;")?);
+    assert!(!test_one("log", "use flog::flag;")?);
+    assert!(!test_one("log", "flog::flag;")?);
+
+    assert!(test_one("log", "use log;")?);
+    assert!(test_one("log", "use log::{self};")?);
+    assert!(test_one("log", "use log::*;")?);
+    assert!(test_one("log", "use log::info;")?);
+    assert!(test_one("log", "use log as logging;")?);
+    assert!(test_one("log", "extern crate log;")?);
+    assert!(test_one("log", "extern crate log as logging")?);
+    assert!(test_one("log", r#"log::info!("fyi")"#)?);
+
+    Ok(())
 }
 
 #[cfg(test)]
