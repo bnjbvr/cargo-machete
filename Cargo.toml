@@ -1,15 +1,10 @@
 [package]
-name = "brute-udeps"
+name = "cargo-machete"
 edition = "2018"
 version = "0.1.0"
 authors = []
 keywords = []
 categories = []
-autobins = true
-autoexamples = true
-autotests = true
-autobenches = true
-publish = true
 
 [dependencies]
 cargo_toml = "0.10.0"
@@ -21,30 +16,3 @@ walkdir = "2.3.2"
 serde = "1.0.130"
 serde_json = "1.0.67"
 anyhow = "1.0.44"
-
-[dev-dependencies]
-
-[build-dependencies]
-
-[target]
-
-[features]
-
-[patch]
-
-[profile]
-[badges.maintenance]
-status = "none"
-
-[[bin]]
-path = "src/main.rs"
-name = "cargo-brute-udeps"
-test = true
-doctest = true
-bench = true
-doc = true
-plugin = false
-proc-macro = false
-harness = true
-edition = "2018"
-required-features = []

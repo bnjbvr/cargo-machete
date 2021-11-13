@@ -35,21 +35,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "904dfeac50f3cdaba28fc6f57fdcddb75f49ed61346676a78c4ffe55877802fd"
 
 [[package]]
-name = "brute-udeps"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "cargo_toml",
- "grep",
- "log",
- "pretty_env_logger",
- "serde",
- "serde_json",
- "toml",
- "walkdir",
-]
-
-[[package]]
 name = "bstr"
 version = "0.2.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -65,6 +50,21 @@ name = "bytecount"
 version = "0.6.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72feb31ffc86498dacdbd0fcebb56138e7177a8cc5cea4516031d15ae85a742e"
+
+[[package]]
+name = "cargo-machete"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "cargo_toml",
+ "grep",
+ "log",
+ "pretty_env_logger",
+ "serde",
+ "serde_json",
+ "toml",
+ "walkdir",
+]
 
 [[package]]
 name = "cargo_toml"
