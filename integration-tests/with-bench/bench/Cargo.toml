@@ -1,0 +1,12 @@
+[package]
+name = "my_bench"
+version = "0.1.0"
+edition = "2021"
+workspace = "../"
+
+[[bin]]
+name = "my_bench"
+
+[dependencies]
+bencher = "0.1.1"
+sortlib = { path = "../lib" }

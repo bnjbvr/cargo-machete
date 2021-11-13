@@ -63,6 +63,11 @@ pub(crate) fn find_unused(manifest_path: &Path) -> anyhow::Result<Option<Package
         }
     }
 
+    if paths.is_empty() {
+        // Assume "src/" if cargo_toml didn't find anything.
+        paths.insert(dir_path.join("src").to_string_lossy().to_string());
+    }
+
     // TODO extend to dev dependencies + build dependencies, and be smarter in the grouping of
     // searched paths
     for (name, _) in analysis.manifest.dependencies.iter() {
@@ -315,6 +320,19 @@ fn test_false_positive_macro_use() -> anyhow::Result<()> {
     )?
     .expect("no error during processing");
     assert_eq!(analysis.unused, &["log".to_string()]);
+
+    Ok(())
+}
+
+#[test]
+fn test_with_bench() -> anyhow::Result<()> {
+    // when a package has a bench file designated by binary name, it seems that `cargo_toml`
+    // doesn't fill in a default path to the source code.
+    let analysis = find_unused(
+        &PathBuf::from(TOP_LEVEL).join("./integration-tests/with-bench/bench/Cargo.toml"),
+    )?
+    .expect("no error during processing");
+    assert!(analysis.unused.is_empty());
 
     Ok(())
 }
