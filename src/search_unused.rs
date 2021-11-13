@@ -250,6 +250,7 @@ fn test_regexp() -> anyhow::Result<()> {
     assert!(!test_one("log", "use da_force_luke;")?);
     assert!(!test_one("log", "use flog;")?);
     assert!(!test_one("log", "use log_once;")?);
+    assert!(!test_one("log", "use log_once::info;")?);
     assert!(!test_one("log", "use flog::flag;")?);
     assert!(!test_one("log", "flog::flag;")?);
 
@@ -272,7 +273,7 @@ const TOP_LEVEL: &str = concat!(env!("CARGO_MANIFEST_DIR"));
 fn test_just_unused() -> anyhow::Result<()> {
     // a crate that simply does not use a dependency it refers to
     let analysis =
-        find_unused(&PathBuf::from(TOP_LEVEL).join("./test_cases/just-unused/Cargo.toml"))?
+        find_unused(&PathBuf::from(TOP_LEVEL).join("./integration-tests/just-unused/Cargo.toml"))?
             .expect("no error during processing");
     assert_eq!(analysis.unused, &["log".to_string()]);
 
@@ -283,34 +284,36 @@ fn test_just_unused() -> anyhow::Result<()> {
 fn test_unused_transitive() -> anyhow::Result<()> {
     // lib1 has zero dependencies
     let analysis = find_unused(
-        &PathBuf::from(TOP_LEVEL).join("./test_cases/unused-transitive/lib1/Cargo.toml"),
+        &PathBuf::from(TOP_LEVEL).join("./integration-tests/unused-transitive/lib1/Cargo.toml"),
     )?
     .expect("no error during processing");
     assert!(analysis.unused.is_empty());
 
     // lib2 effectively uses lib1
     let analysis = find_unused(
-        &PathBuf::from(TOP_LEVEL).join("./test_cases/unused-transitive/lib2/Cargo.toml"),
+        &PathBuf::from(TOP_LEVEL).join("./integration-tests/unused-transitive/lib2/Cargo.toml"),
     )?
     .expect("no error during processing");
     assert!(analysis.unused.is_empty());
 
     // but top level references both lib1 and lib2, and only uses lib2
-    let analysis =
-        find_unused(&PathBuf::from(TOP_LEVEL).join("./test_cases/unused-transitive/Cargo.toml"))?
-            .expect("no error during processing");
+    let analysis = find_unused(
+        &PathBuf::from(TOP_LEVEL).join("./integration-tests/unused-transitive/Cargo.toml"),
+    )?
+    .expect("no error during processing");
     assert_eq!(analysis.unused, &["lib1".to_string()]);
 
     Ok(())
 }
 
 #[test]
-fn test_macro_use() -> anyhow::Result<()> {
+fn test_false_positive_macro_use() -> anyhow::Result<()> {
     // when a lib uses a dependency via a macro, there's no way we can find it by scanning the
     // source code.
-    let analysis =
-        find_unused(&PathBuf::from(TOP_LEVEL).join("./test_cases/false-positive-log/Cargo.toml"))?
-            .expect("no error during processing");
+    let analysis = find_unused(
+        &PathBuf::from(TOP_LEVEL).join("./integration-tests/false-positive-log/Cargo.toml"),
+    )?
+    .expect("no error during processing");
     assert_eq!(analysis.unused, &["log".to_string()]);
 
     Ok(())
