@@ -1,10 +1,13 @@
 [package]
 name = "cargo-machete"
-edition = "2018"
+edition = "2021"
 version = "0.1.0"
-authors = []
+description = "Find unused dependencies with this one weird trick!"
+authors = [ "Benjamin Bouvier <public@benj.me>" ]
+repository = "https://github.com/bnjbvr/cargo-machete"
 keywords = []
 categories = []
+license = "MIT/Apache-2.0"
 
 [dependencies]
 cargo_toml = "0.10.0"
