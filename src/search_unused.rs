@@ -1,4 +1,8 @@
-use std::{collections::HashSet, error, path::PathBuf};
+use std::{
+    collections::HashSet,
+    error,
+    path::{Path, PathBuf},
+};
 
 use grep::{
     regex::RegexMatcher,
@@ -9,13 +13,13 @@ use walkdir::WalkDir;
 
 use crate::PackageAnalysis;
 
-pub(crate) fn find_unused(manifest_path: &PathBuf) -> anyhow::Result<Option<PackageAnalysis>> {
-    let mut dir_path = manifest_path.clone();
+pub(crate) fn find_unused(manifest_path: &Path) -> anyhow::Result<Option<PackageAnalysis>> {
+    let mut dir_path = manifest_path.to_path_buf();
     dir_path.pop();
 
     trace!("trying to open {}...", manifest_path.display());
 
-    let manifest = cargo_toml::Manifest::from_path(manifest_path.clone())?;
+    let manifest = cargo_toml::Manifest::from_path(manifest_path)?;
     let package_name = match manifest.package {
         Some(ref package) => &package.name,
         None => return Ok(None),
@@ -88,7 +92,7 @@ pub(crate) fn find_unused(manifest_path: &PathBuf) -> anyhow::Result<Option<Pack
         }
     }
 
-    return Ok(Some(analysis));
+    Ok(Some(analysis))
 }
 
 struct StopAfterFirstMatch {
@@ -175,10 +179,9 @@ const TOP_LEVEL: &str = concat!(env!("CARGO_MANIFEST_DIR"));
 #[test]
 fn test_just_unused() -> anyhow::Result<()> {
     // a crate that simply does not use a dependency it refers to
-    let analysis = find_unused(
-        &PathBuf::from(TOP_LEVEL).join("./test_cases/just-unused/Cargo.toml"),
-    )?
-    .expect("no error during processing");
+    let analysis =
+        find_unused(&PathBuf::from(TOP_LEVEL).join("./test_cases/just-unused/Cargo.toml"))?
+            .expect("no error during processing");
     assert_eq!(analysis.unused, &["log".to_string()]);
 
     Ok(())

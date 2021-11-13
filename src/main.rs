@@ -73,7 +73,7 @@ fn compare_with_cargo_udeps(our_analysis: &mut PackageAnalysis) -> anyhow::Resul
         our_analysis.unused = inter_set.into_iter().cloned().collect();
     }
 
-    return Ok(());
+    Ok(())
 }
 
 fn main() -> anyhow::Result<()> {

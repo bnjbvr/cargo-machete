@@ -1,0 +1,47 @@
+name: Rust
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  ci:
+    env:
+        RUST_BACKTRACE: 1
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        rust:
+          - stable
+          - nightly
+
+    steps:
+      - uses: actions/checkout@v2
+
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: ${{ matrix.rust }}
+          override: true
+          components: clippy, rustfmt
+
+      - uses: Swatinem/rust-cache@v1
+
+      - name: Format
+        uses: actions-rs/cargo@v1
+        with:
+          command: fmt
+          args: --all -- --check
+
+      - name: Clippy
+        uses: actions-rs/cargo@v1
+        with:
+          command: clippy
+          args: --all
+
+      - name: Test
+        uses: actions-rs/cargo@v1
+        with:
+          command: test
+          args: --all --verbose
