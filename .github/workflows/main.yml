@@ -22,9 +22,9 @@ jobs:
 
       - uses: actions-rs/toolchain@v1
         with:
-          profile: minimal
           toolchain: ${{ matrix.rust }}
           override: true
+          components: clippy, rustfmt
 
       - uses: Swatinem/rust-cache@v1
 
