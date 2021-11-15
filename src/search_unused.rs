@@ -1,14 +1,14 @@
-use std::{
-    collections::HashSet,
-    error,
-    path::{Path, PathBuf},
-};
-
 use grep::{
     regex::{RegexMatcher, RegexMatcherBuilder},
     searcher::{self, BinaryDetection, Searcher, SearcherBuilder, Sink},
 };
 use log::{debug, trace};
+use rayon::prelude::*;
+use std::{
+    collections::HashSet,
+    error,
+    path::{Path, PathBuf},
+};
 use walkdir::WalkDir;
 
 use crate::PackageAnalysis;
@@ -169,29 +169,35 @@ pub(crate) fn find_unused(manifest_path: &Path) -> anyhow::Result<Option<Package
 
     // TODO extend to dev dependencies + build dependencies, and be smarter in the grouping of
     // searched paths
-    for (name, _) in analysis.manifest.dependencies.iter() {
-        let mut search = Search::new(name)?;
+    analysis.unused = analysis
+        .manifest
+        .dependencies
+        .par_iter()
+        .filter_map(|(name, _)| {
+            let mut search = Search::new(name).expect("constructing grep context ");
 
-        let mut found_once = false;
-        for path in &paths {
-            trace!("looking for {} in {}", name, path.to_string_lossy(),);
-            match search.search_path(path) {
-                Ok(true) => {
-                    found_once = true;
-                    break;
-                }
-                Ok(false) => {}
-                Err(err) => {
-                    eprintln!("{}: {}", path.display(), err);
-                }
-            };
-        }
+            let mut found_once = false;
+            for path in &paths {
+                trace!("looking for {} in {}", name, path.to_string_lossy(),);
+                match search.search_path(path) {
+                    Ok(true) => {
+                        found_once = true;
+                        break;
+                    }
+                    Ok(false) => {}
+                    Err(err) => {
+                        eprintln!("{}: {}", path.display(), err);
+                    }
+                };
+            }
 
-        if !found_once {
-            debug!("{} might be unused", name);
-            analysis.unused.push(name.clone());
-        }
-    }
+            if !found_once {
+                Some(name.clone())
+            } else {
+                None
+            }
+        })
+        .collect();
 
     Ok(Some(analysis))
 }

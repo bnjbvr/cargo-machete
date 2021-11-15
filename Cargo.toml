@@ -20,6 +20,7 @@ anyhow = "1.0.44"
 
 serde = { version = "1.0.130", optional = true }
 serde_json = { version = "1.0.67", optional = true }
+rayon = "1.5.1"
 
 [features]
 cargo_udeps = ["serde", "serde_json"]
