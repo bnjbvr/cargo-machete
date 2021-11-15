@@ -24,6 +24,86 @@ fn make_regexp(crate_name: &str) -> String {
     )
 }
 
+/// Returns all the paths to the Rust source files for a crate contained at the given path.
+fn collect_paths(dir_path: &Path, analysis: &PackageAnalysis) -> Vec<PathBuf> {
+    let mut root_paths = HashSet::new();
+
+    if let Some(path) = analysis
+        .manifest
+        .lib
+        .as_ref()
+        .and_then(|lib| lib.path.as_ref())
+    {
+        assert!(
+            path.ends_with(".rs"),
+            "paths provided by cargo_toml are to Rust files"
+        );
+        let mut path_buf = PathBuf::from(path);
+        // Remove .rs extension.
+        path_buf.pop();
+        root_paths.insert(path_buf);
+    }
+
+    for product in analysis
+        .manifest
+        .bin
+        .iter()
+        .chain(analysis.manifest.bench.iter())
+        .chain(analysis.manifest.test.iter())
+        .chain(analysis.manifest.example.iter())
+    {
+        if let Some(ref path) = product.path {
+            assert!(
+                path.ends_with(".rs"),
+                "paths provided by cargo_toml are to Rust files"
+            );
+            let mut path_buf = PathBuf::from(path);
+            // Remove .rs extension.
+            path_buf.pop();
+            root_paths.insert(path_buf);
+        }
+    }
+
+    trace!("found root paths: {:?}", root_paths);
+
+    if root_paths.is_empty() {
+        // Assume "src/" if cargo_toml didn't find anything.
+        root_paths.insert(dir_path.join("src"));
+        trace!("adding src/ since paths was empty");
+    }
+
+    // Collect all final paths for the crate first.
+    let paths: Vec<PathBuf> = root_paths
+        .iter()
+        .map(|root| WalkDir::new(dir_path.join(root)).into_iter())
+        .flatten()
+        .filter_map(|result| {
+            let dir_entry = match result {
+                Ok(dir_entry) => dir_entry,
+                Err(err) => {
+                    eprintln!("{}", err);
+                    return None;
+                }
+            };
+            if !dir_entry.file_type().is_file() {
+                return None;
+            }
+            if dir_entry
+                .path()
+                .extension()
+                .map_or(true, |ext| ext.to_string_lossy() != "rs")
+            {
+                return None;
+            }
+            Some(dir_path.join(dir_entry.path()))
+        })
+        .collect();
+
+    trace!("found transitive paths: {:?}", paths);
+
+    paths
+}
+
 pub(crate) fn find_unused(manifest_path: &Path) -> anyhow::Result<Option<PackageAnalysis>> {
     let mut dir_path = manifest_path.to_path_buf();
     dir_path.pop();
@@ -40,63 +120,33 @@ pub(crate) fn find_unused(manifest_path: &Path) -> anyhow::Result<Option<Package
 
     let mut analysis = PackageAnalysis::new(package_name.clone(), manifest);
 
-    let mut paths = HashSet::new();
-    if let Some(path) = analysis
-        .manifest
-        .lib
-        .as_ref()
-        .and_then(|lib| lib.path.as_ref())
-    {
-        paths.insert(path.clone());
-    }
-
-    for product in analysis
-        .manifest
-        .bin
-        .iter()
-        .chain(analysis.manifest.bench.iter())
-        .chain(analysis.manifest.test.iter())
-        .chain(analysis.manifest.example.iter())
-    {
-        if let Some(ref path) = product.path {
-            paths.insert(path.clone());
-        }
-    }
-
-    trace!("found paths: {:?}", paths.iter());
-
-    if paths.is_empty() {
-        // Assume "src/" if cargo_toml didn't find anything.
-        paths.insert(dir_path.join("src").to_string_lossy().to_string());
-        trace!("adding src/ since paths was empty");
-    }
+    let paths = collect_paths(&dir_path, &analysis);
 
     // TODO extend to dev dependencies + build dependencies, and be smarter in the grouping of
     // searched paths
     for (name, _) in analysis.manifest.dependencies.iter() {
         let snaked = name.replace('-', "_");
-
         let pattern = make_regexp(&snaked);
+
+        let matcher = RegexMatcher::new_line_matcher(&pattern)?;
+        let mut searcher = SearcherBuilder::new()
+            .binary_detection(BinaryDetection::quit(b'\x00'))
+            .line_number(false)
+            .build();
 
         let mut found_once = false;
         for path in &paths {
-            let mut path = dir_path.join(path);
-            // Remove the .rs suffix.
-            path.pop();
-
             trace!("looking for {} in {}", pattern, path.to_string_lossy(),);
-            match search(dir_path.join(path), &pattern) {
-                Ok(found) => {
-                    if found {
-                        found_once = true;
-                        break;
-                    }
+            match search_one(&mut searcher, &matcher, &**path) {
+                Ok(true) => {
+                    found_once = true;
+                    break;
                 }
+                Ok(false) => {}
                 Err(err) => {
-                    analysis.errors.push(err);
-                    continue;
+                    eprintln!("{}: {}", path.display(), err);
                 }
-            };
+            }
         }
 
         if !found_once {
@@ -130,8 +180,9 @@ impl Sink for StopAfterFirstMatch {
         let mat = mat.trim();
 
         if mat.starts_with("//") || mat.starts_with("//!") {
-            // Continue if seeing a comment or doc comment.
-            // TODO do something smarter! what about multiline strings containing //, etc.
+            // Continue if seeing what resembles a comment or doc comment. Unfortunately we can't
+            // do anything better because trying to figure whether we're within a (doc) comment
+            // would require actual parsing of the Rust code.
             return Ok(true);
         }
 
@@ -187,49 +238,6 @@ fn search_one<S: Searchable>(
         .search(matcher, searcher, &mut sink)
         .map_err(|err| anyhow::anyhow!("when searching: {}", err))
         .map(|_| sink.found)
-}
-
-fn search(path: PathBuf, text: &str) -> anyhow::Result<bool> {
-    let matcher = RegexMatcher::new_line_matcher(text)?;
-
-    let mut searcher = SearcherBuilder::new()
-        .binary_detection(BinaryDetection::quit(b'\x00'))
-        .line_number(false)
-        .build();
-
-    for result in WalkDir::new(path) {
-        let dir_entry = match result {
-            Ok(dir_entry) => dir_entry,
-            Err(err) => {
-                eprintln!("{}", err);
-                continue;
-            }
-        };
-
-        trace!("found entry {:?}", dir_entry);
-
-        if !dir_entry.file_type().is_file() {
-            continue;
-        }
-
-        if dir_entry
-            .path()
-            .extension()
-            .map_or(true, |ext| ext.to_string_lossy() != "rs")
-        {
-            continue;
-        }
-
-        match search_one(&mut searcher, &matcher, dir_entry.path()) {
-            Ok(true) => return Ok(true),
-            Ok(false) => {}
-            Err(err) => {
-                eprintln!("{}: {}", dir_entry.path().display(), err);
-            }
-        }
-    }
-
-    Ok(false)
 }
 
 #[test]

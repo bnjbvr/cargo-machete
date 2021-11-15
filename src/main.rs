@@ -12,7 +12,6 @@ struct PackageAnalysis {
     manifest: cargo_toml::Manifest,
     package_name: String,
     unused: Vec<String>,
-    errors: Vec<anyhow::Error>,
 }
 
 impl PackageAnalysis {
@@ -21,7 +20,6 @@ impl PackageAnalysis {
             manifest,
             package_name: name,
             unused: Default::default(),
-            errors: Default::default(),
         }
     }
 }
