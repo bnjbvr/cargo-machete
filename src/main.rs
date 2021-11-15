@@ -82,9 +82,9 @@ fn main() -> anyhow::Result<()> {
                         info!("rewriting Cargo.toml");
                         for dep in analysis.unused {
                             analysis.manifest.dependencies.remove(&dep);
-                            let serialized = toml::to_string(&analysis.manifest)?;
-                            fs::write(path.clone(), serialized)?;
                         }
+                        let serialized = toml::to_string(&analysis.manifest)?;
+                        fs::write(path.clone(), serialized)?;
                     }
                 }
 

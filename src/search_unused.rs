@@ -6,7 +6,7 @@ use std::{
 
 use grep::{
     regex::RegexMatcher,
-    searcher::{BinaryDetection, Searcher, SearcherBuilder},
+    searcher::{self, BinaryDetection, Searcher, SearcherBuilder, Sink},
 };
 use log::{debug, trace};
 use walkdir::WalkDir;
@@ -63,9 +63,12 @@ pub(crate) fn find_unused(manifest_path: &Path) -> anyhow::Result<Option<Package
         }
     }
 
+    trace!("found paths: {:?}", paths.iter());
+
     if paths.is_empty() {
         // Assume "src/" if cargo_toml didn't find anything.
         paths.insert(dir_path.join("src").to_string_lossy().to_string());
+        trace!("adding src/ since paths was empty");
     }
 
     // TODO extend to dev dependencies + build dependencies, and be smarter in the grouping of
@@ -115,13 +118,13 @@ impl StopAfterFirstMatch {
     }
 }
 
-impl grep::searcher::Sink for StopAfterFirstMatch {
+impl Sink for StopAfterFirstMatch {
     type Error = Box<dyn error::Error>;
 
     fn matched(
         &mut self,
-        _searcher: &grep::searcher::Searcher,
-        mat: &grep::searcher::SinkMatch<'_>,
+        _searcher: &searcher::Searcher,
+        mat: &searcher::SinkMatch<'_>,
     ) -> Result<bool, Self::Error> {
         let mat = String::from_utf8(mat.bytes().to_vec())?;
         let mat = mat.trim();
@@ -139,12 +142,7 @@ impl grep::searcher::Sink for StopAfterFirstMatch {
     }
 }
 
-enum SearchOneResult {
-    Found(bool),
-    Error(Box<dyn std::error::Error>),
-}
-
-trait Searchable {
+trait Searchable: std::fmt::Debug {
     fn search(
         &self,
         matcher: &RegexMatcher,
@@ -182,13 +180,13 @@ fn search_one<S: Searchable>(
     searcher: &mut Searcher,
     matcher: &RegexMatcher,
     searchable: S,
-) -> SearchOneResult {
+) -> anyhow::Result<bool> {
+    trace!("searching in {:?}", searchable);
     let mut sink = StopAfterFirstMatch::new();
-    if let Err(err) = searchable.search(matcher, searcher, &mut sink) {
-        SearchOneResult::Error(err)
-    } else {
-        SearchOneResult::Found(sink.found)
-    }
+    searchable
+        .search(matcher, searcher, &mut sink)
+        .map_err(|err| anyhow::anyhow!("when searching: {}", err))
+        .map(|_| sink.found)
 }
 
 fn search(path: PathBuf, text: &str) -> anyhow::Result<bool> {
@@ -208,6 +206,8 @@ fn search(path: PathBuf, text: &str) -> anyhow::Result<bool> {
             }
         };
 
+        trace!("found entry {:?}", dir_entry);
+
         if !dir_entry.file_type().is_file() {
             continue;
         }
@@ -221,12 +221,9 @@ fn search(path: PathBuf, text: &str) -> anyhow::Result<bool> {
         }
 
         match search_one(&mut searcher, &matcher, dir_entry.path()) {
-            SearchOneResult::Found(found) => {
-                if found {
-                    return Ok(true);
-                }
-            }
-            SearchOneResult::Error(err) => {
+            Ok(true) => return Ok(true),
+            Ok(false) => {}
+            Err(err) => {
                 eprintln!("{}: {}", dir_entry.path().display(), err);
             }
         }
@@ -239,17 +236,11 @@ fn search(path: PathBuf, text: &str) -> anyhow::Result<bool> {
 fn test_regexp() -> anyhow::Result<()> {
     fn test_one(crate_name: &str, content: &str) -> anyhow::Result<bool> {
         let matcher = RegexMatcher::new_line_matcher(&make_regexp(crate_name))?;
-
         let mut searcher = SearcherBuilder::new()
             .binary_detection(BinaryDetection::quit(b'\x00'))
             .line_number(false)
             .build();
-
-        if let SearchOneResult::Found(val) = search_one(&mut searcher, &matcher, content) {
-            Ok(val)
-        } else {
-            unreachable!()
-        }
+        search_one(&mut searcher, &matcher, content)
     }
 
     assert!(!test_one("log", "use da_force_luke;")?);
@@ -267,6 +258,7 @@ fn test_regexp() -> anyhow::Result<()> {
     assert!(test_one("log", "extern crate log;")?);
     assert!(test_one("log", "extern crate log as logging")?);
     assert!(test_one("log", r#"log::info!("fyi")"#)?);
+    assert!(test_one("bitflags", "bitflags::bitflags! {")?);
 
     Ok(())
 }
