@@ -67,8 +67,6 @@ dependencies = [
  "log",
  "pretty_env_logger",
  "rayon",
- "serde",
- "serde_json",
  "toml",
  "walkdir",
 ]
