@@ -5,7 +5,7 @@ use std::{
 };
 
 use grep::{
-    regex::RegexMatcher,
+    regex::{RegexMatcher, RegexMatcherBuilder},
     searcher::{self, BinaryDetection, Searcher, SearcherBuilder, Sink},
 };
 use log::{debug, trace};
@@ -14,9 +14,10 @@ use walkdir::WalkDir;
 use crate::PackageAnalysis;
 
 fn make_regexp(crate_name: &str) -> String {
-    // Breaking down this regular expression:
+    // Breaking down this regular expression: given a line,
     // - `use {name}(::|;| as)`: matches `use foo;`, `use foo::bar`, `use foo as bar;`.
-    // - `(^|\\W)({name})::`: matches `foo::X`, but not `barfoo::X`.
+    // - `(^|\\W)({name})::`: matches `foo::X`, but not `barfoo::X`. Note the `^` refers to the
+    // beginning of the line (because of multi-line mode), not the beginning of the input.
     // - `extern crate {name}( |;)`: matches `extern crate foo`, or `extern crate foo as bar`.
     format!(
         "use {name}(::|;| as)|(^|\\W)({name})::|extern crate {name}( |;)",
@@ -104,6 +105,50 @@ fn collect_paths(dir_path: &Path, analysis: &PackageAnalysis) -> Vec<PathBuf> {
     paths
 }
 
+struct Search {
+    matcher: RegexMatcher,
+    searcher: Searcher,
+    sink: StopAfterFirstMatch,
+}
+
+impl Search {
+    fn new(crate_name: &str) -> anyhow::Result<Self> {
+        let snaked = crate_name.replace('-', "_");
+        let pattern = make_regexp(&snaked);
+        let matcher = RegexMatcherBuilder::new()
+            .line_terminator(Some(b'\n'))
+            .multi_line(true)
+            .build(&pattern)?;
+
+        let searcher = SearcherBuilder::new()
+            .binary_detection(BinaryDetection::quit(b'\x00'))
+            .line_number(false)
+            .build();
+        let sink = StopAfterFirstMatch::new();
+
+        Ok(Self {
+            matcher,
+            searcher,
+            sink,
+        })
+    }
+
+    fn search_path(&mut self, path: &Path) -> Result<bool, anyhow::Error> {
+        self.searcher
+            .search_path(&self.matcher, path, &mut self.sink)
+            .map_err(|err| anyhow::anyhow!("when searching: {}", err))
+            .map(|_| self.sink.found)
+    }
+
+    #[cfg(test)]
+    fn search_string(&mut self, s: &str) -> Result<bool, anyhow::Error> {
+        self.searcher
+            .search_reader(&self.matcher, s.as_bytes(), &mut self.sink)
+            .map_err(|err| anyhow::anyhow!("when searching: {}", err))
+            .map(|_| self.sink.found)
+    }
+}
+
 pub(crate) fn find_unused(manifest_path: &Path) -> anyhow::Result<Option<PackageAnalysis>> {
     let mut dir_path = manifest_path.to_path_buf();
     dir_path.pop();
@@ -125,19 +170,12 @@ pub(crate) fn find_unused(manifest_path: &Path) -> anyhow::Result<Option<Package
     // TODO extend to dev dependencies + build dependencies, and be smarter in the grouping of
     // searched paths
     for (name, _) in analysis.manifest.dependencies.iter() {
-        let snaked = name.replace('-', "_");
-        let pattern = make_regexp(&snaked);
-
-        let matcher = RegexMatcher::new_line_matcher(&pattern)?;
-        let mut searcher = SearcherBuilder::new()
-            .binary_detection(BinaryDetection::quit(b'\x00'))
-            .line_number(false)
-            .build();
+        let mut search = Search::new(name)?;
 
         let mut found_once = false;
         for path in &paths {
-            trace!("looking for {} in {}", pattern, path.to_string_lossy(),);
-            match search_one(&mut searcher, &matcher, &**path) {
+            trace!("looking for {} in {}", name, path.to_string_lossy(),);
+            match search.search_path(path) {
                 Ok(true) => {
                     found_once = true;
                     break;
@@ -146,7 +184,7 @@ pub(crate) fn find_unused(manifest_path: &Path) -> anyhow::Result<Option<Package
                 Err(err) => {
                     eprintln!("{}: {}", path.display(), err);
                 }
-            }
+            };
         }
 
         if !found_once {
@@ -193,62 +231,11 @@ impl Sink for StopAfterFirstMatch {
     }
 }
 
-trait Searchable: std::fmt::Debug {
-    fn search(
-        &self,
-        matcher: &RegexMatcher,
-        searcher: &mut Searcher,
-        sink: &mut StopAfterFirstMatch,
-    ) -> Result<(), Box<dyn error::Error>>;
-}
-
-impl Searchable for &str {
-    #[inline]
-    fn search(
-        &self,
-        matcher: &RegexMatcher,
-        searcher: &mut Searcher,
-        sink: &mut StopAfterFirstMatch,
-    ) -> Result<(), Box<dyn error::Error>> {
-        searcher.search_reader(matcher, self.as_bytes(), sink)
-    }
-}
-
-impl Searchable for &Path {
-    #[inline]
-    fn search(
-        &self,
-        matcher: &RegexMatcher,
-        searcher: &mut Searcher,
-        sink: &mut StopAfterFirstMatch,
-    ) -> Result<(), Box<dyn error::Error>> {
-        searcher.search_path(matcher, self, sink)
-    }
-}
-
-#[inline]
-fn search_one<S: Searchable>(
-    searcher: &mut Searcher,
-    matcher: &RegexMatcher,
-    searchable: S,
-) -> anyhow::Result<bool> {
-    trace!("searching in {:?}", searchable);
-    let mut sink = StopAfterFirstMatch::new();
-    searchable
-        .search(matcher, searcher, &mut sink)
-        .map_err(|err| anyhow::anyhow!("when searching: {}", err))
-        .map(|_| sink.found)
-}
-
 #[test]
 fn test_regexp() -> anyhow::Result<()> {
     fn test_one(crate_name: &str, content: &str) -> anyhow::Result<bool> {
-        let matcher = RegexMatcher::new_line_matcher(&make_regexp(crate_name))?;
-        let mut searcher = SearcherBuilder::new()
-            .binary_detection(BinaryDetection::quit(b'\x00'))
-            .line_number(false)
-            .build();
-        search_one(&mut searcher, &matcher, content)
+        let mut search = Search::new(crate_name)?;
+        search.search_string(content)
     }
 
     assert!(!test_one("log", "use da_force_luke;")?);
@@ -266,7 +253,14 @@ fn test_regexp() -> anyhow::Result<()> {
     assert!(test_one("log", "extern crate log;")?);
     assert!(test_one("log", "extern crate log as logging")?);
     assert!(test_one("log", r#"log::info!("fyi")"#)?);
-    assert!(test_one("bitflags", "bitflags::bitflags! {")?);
+
+    assert!(test_one(
+        "bitflags",
+        r#"
+use std::fmt;
+bitflags::macro! {
+"#
+    )?);
 
     Ok(())
 }
