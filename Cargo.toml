@@ -10,13 +10,13 @@ categories = []
 license = "MIT/Apache-2.0"
 
 [dependencies]
-cargo_toml = "0.10.0"
+cargo_toml = "0.10.1"
 grep = "0.2.8"
 log = "0.4.14"
 pretty_env_logger = "0.4.0"
 toml = "0.5.8"
 walkdir = "2.3.2"
-anyhow = "1.0.44"
+anyhow = "1.0.47"
 rayon = "1.5.1"
 
 # Uncomment this for profiling.
