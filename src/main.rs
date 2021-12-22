@@ -1,24 +1,9 @@
 mod search_unused;
 
 use crate::search_unused::find_unused;
+use rayon::prelude::*;
 use std::fs;
 use walkdir::WalkDir;
-
-struct PackageAnalysis {
-    manifest: cargo_toml::Manifest,
-    package_name: String,
-    unused: Vec<String>,
-}
-
-impl PackageAnalysis {
-    fn new(name: String, manifest: cargo_toml::Manifest) -> Self {
-        Self {
-            manifest,
-            package_name: name,
-            unused: Default::default(),
-        }
-    }
-}
 
 fn main() -> anyhow::Result<()> {
     pretty_env_logger::init();
@@ -35,41 +20,62 @@ fn main() -> anyhow::Result<()> {
     eprintln!("Looking for crates in this directory and analyzing their dependencies...");
 
     let cwd = std::env::current_dir()?;
-    for entry in WalkDir::new(cwd) {
-        let entry = entry?;
-        if entry.file_name() == "Cargo.toml" {
-            let path = entry.into_path();
-            match find_unused(&path) {
-                Ok(Some(mut analysis)) => {
-                    if analysis.unused.is_empty() {
-                        continue;
-                    }
 
-                    println!("{} -- {}:", analysis.package_name, path.to_string_lossy());
-                    for dep in &analysis.unused {
-                        println!("\t{}", dep)
-                    }
+    // Find directory entries.
+    let entries = WalkDir::new(cwd)
+        .into_iter()
+        .filter_map(|entry| match entry {
+            Ok(entry) if entry.file_name() == "Cargo.toml" => Some(entry.into_path()),
+            Err(err) => {
+                eprintln!("error when walking over subdirectories: {}", err);
+                None
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
 
-                    if fix {
-                        for dep in analysis.unused {
-                            analysis.manifest.dependencies.remove(&dep);
-                        }
-                        let serialized = toml::to_string(&analysis.manifest)?;
-                        fs::write(path.clone(), serialized)?;
-                    }
-                }
-
-                Ok(None) => {
-                    println!(
-                        "{} -- no package, must be a workspace",
-                        path.to_string_lossy()
-                    );
-                }
-
-                Err(err) => {
-                    eprintln!("error when handling {}: {}", path.display(), err);
+    // Run analysis in parallel. This will spawn new rayon tasks when dependencies are effectively
+    // used by any Rust crate.
+    let results = entries
+        .par_iter()
+        .filter_map(|path| match find_unused(path) {
+            Ok(Some(analysis)) => {
+                if analysis.unused.is_empty() {
+                    None
+                } else {
+                    Some((analysis, path))
                 }
             }
+
+            Ok(None) => {
+                log::info!(
+                    "{} -- no package, must be a workspace",
+                    path.to_string_lossy()
+                );
+                None
+            }
+
+            Err(err) => {
+                eprintln!("error when handling {}: {}", path.display(), err);
+                None
+            }
+        })
+        .collect::<Vec<_>>();
+
+    // Display all the results.
+    for (mut analysis, path) in results {
+        println!("{} -- {}:", analysis.package_name, path.to_string_lossy());
+        for dep in &analysis.unused {
+            println!("\t{}", dep)
+        }
+
+        if fix {
+            for dep in analysis.unused {
+                analysis.manifest.dependencies.remove(&dep);
+            }
+            let serialized = toml::to_string(&analysis.manifest)
+                .expect("error when converting updated manifest to toml");
+            fs::write(&path, serialized).expect("Cargo.toml write error");
         }
     }
 

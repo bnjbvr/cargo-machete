@@ -1,3 +1,4 @@
+use cargo_metadata::CargoOpt;
 use grep::{
     regex::{RegexMatcher, RegexMatcherBuilder},
     searcher::{self, BinaryDetection, Searcher, SearcherBuilder, Sink},
@@ -11,7 +12,32 @@ use std::{
 };
 use walkdir::WalkDir;
 
-use crate::PackageAnalysis;
+pub(crate) struct PackageAnalysis {
+    metadata: cargo_metadata::Metadata,
+    pub manifest: cargo_toml::Manifest,
+    pub package_name: String,
+    pub unused: Vec<String>,
+}
+
+impl PackageAnalysis {
+    fn new(
+        package_name: String,
+        cargo_path: &Path,
+        manifest: cargo_toml::Manifest,
+    ) -> anyhow::Result<Self> {
+        let metadata = cargo_metadata::MetadataCommand::new()
+            .features(CargoOpt::AllFeatures)
+            .manifest_path(cargo_path)
+            .exec()?;
+
+        Ok(Self {
+            metadata,
+            manifest,
+            package_name,
+            unused: Default::default(),
+        })
+    }
+}
 
 fn make_regexp(crate_name: &str) -> String {
     // Breaking down this regular expression: given a line,
@@ -157,47 +183,63 @@ pub(crate) fn find_unused(manifest_path: &Path) -> anyhow::Result<Option<Package
 
     let manifest = cargo_toml::Manifest::from_path(manifest_path)?;
     let package_name = match manifest.package {
-        Some(ref package) => &package.name,
+        Some(ref package) => package.name.clone(),
         None => return Ok(None),
     };
 
     debug!("handling {} ({})", package_name, dir_path.display());
 
-    let mut analysis = PackageAnalysis::new(package_name.clone(), manifest);
+    let mut analysis = PackageAnalysis::new(package_name.clone(), manifest_path, manifest)?;
 
     let paths = collect_paths(&dir_path, &analysis);
 
     // TODO extend to dev dependencies + build dependencies, and be smarter in the grouping of
     // searched paths
-    analysis.unused = analysis
-        .manifest
-        .dependencies
-        .par_iter()
-        .filter_map(|(name, _)| {
-            let mut search = Search::new(name).expect("constructing grep context ");
+    if let Some(ref resolve) = analysis.metadata.resolve {
+        let deps = &resolve
+            .nodes
+            .iter()
+            .find(|node| {
+                // e.g. aa 0.1.0 (path+file:///tmp/aa)
+                if let Some(node_package_name) = node.id.repr.split(' ').next() {
+                    node_package_name == package_name
+                } else {
+                    false
+                }
+                //node.id.repr == analysis.
+            })
+            .expect("the current package must be in the dependency graph")
+            .deps;
 
-            let mut found_once = false;
-            for path in &paths {
-                trace!("looking for {} in {}", name, path.to_string_lossy(),);
-                match search.search_path(path) {
-                    Ok(true) => {
-                        found_once = true;
-                        break;
-                    }
-                    Ok(false) => {}
-                    Err(err) => {
-                        eprintln!("{}: {}", path.display(), err);
-                    }
-                };
-            }
+        analysis.unused = deps
+            .par_iter()
+            .filter_map(|node_dep| {
+                let name = node_dep.name.clone();
+                let mut search = Search::new(name.as_str()).expect("constructing grep context ");
 
-            if !found_once {
-                Some(name.clone())
-            } else {
-                None
-            }
-        })
-        .collect();
+                let mut found_once = false;
+                for path in &paths {
+                    trace!("looking for {} in {}", name, path.to_string_lossy(),);
+                    match search.search_path(path) {
+                        Ok(true) => {
+                            found_once = true;
+                            break;
+                        }
+                        Ok(false) => {}
+                        Err(err) => {
+                            eprintln!("{}: {}", path.display(), err);
+                        }
+                    };
+                }
+
+                if !found_once {
+                    Some(name)
+                } else {
+                    None
+                }
+            })
+            .collect();
+    }
 
     Ok(Some(analysis))
 }
@@ -330,6 +372,19 @@ fn test_with_bench() -> anyhow::Result<()> {
     // doesn't fill in a default path to the source code.
     let analysis = find_unused(
         &PathBuf::from(TOP_LEVEL).join("./integration-tests/with-bench/bench/Cargo.toml"),
+    )?
+    .expect("no error during processing");
+    assert!(analysis.unused.is_empty());
+
+    Ok(())
+}
+
+#[test]
+fn test_crate_renaming_works() -> anyhow::Result<()> {
+    // when a lib like xml-rs is exposed with a different name, cargo-machete doesn't return false
+    // positives.
+    let analysis = find_unused(
+        &PathBuf::from(TOP_LEVEL).join("./integration-tests/renaming-works/Cargo.toml"),
     )?
     .expect("no error during processing");
     assert!(analysis.unused.is_empty());
