@@ -4,22 +4,6 @@ use crate::search_unused::find_unused;
 use std::fs;
 use walkdir::WalkDir;
 
-struct PackageAnalysis {
-    manifest: cargo_toml::Manifest,
-    package_name: String,
-    unused: Vec<String>,
-}
-
-impl PackageAnalysis {
-    fn new(name: String, manifest: cargo_toml::Manifest) -> Self {
-        Self {
-            manifest,
-            package_name: name,
-            unused: Default::default(),
-        }
-    }
-}
-
 fn main() -> anyhow::Result<()> {
     pretty_env_logger::init();
 
@@ -60,7 +44,7 @@ fn main() -> anyhow::Result<()> {
                 }
 
                 Ok(None) => {
-                    println!(
+                    log::info!(
                         "{} -- no package, must be a workspace",
                         path.to_string_lossy()
                     );
