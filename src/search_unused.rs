@@ -378,3 +378,16 @@ fn test_with_bench() -> anyhow::Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn test_crate_renaming_works() -> anyhow::Result<()> {
+    // when a lib like xml-rs is exposed with a different name, cargo-machete doesn't return false
+    // positives.
+    let analysis = find_unused(
+        &PathBuf::from(TOP_LEVEL).join("./integration-tests/renaming-works/Cargo.toml"),
+    )?
+    .expect("no error during processing");
+    assert!(analysis.unused.is_empty());
+
+    Ok(())
+}
