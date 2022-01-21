@@ -45,8 +45,12 @@ fn make_regexp(crate_name: &str) -> String {
     // - `(^|\\W)({name})::`: matches `foo::X`, but not `barfoo::X`. Note the `^` refers to the
     // beginning of the line (because of multi-line mode), not the beginning of the input.
     // - `extern crate {name}( |;)`: matches `extern crate foo`, or `extern crate foo as bar`.
+    // - `use \\{{\\s((?s).*(?-s)){name}\\s*as\\s*((?s).*(?-s))\\}};`: The Terrible One: tries to
+    // match compound use as statements, as in `use { X as Y };`, with possibly multiple-lines in
+    // between. Will match the first `};` that it finds, which *should* be the end of the use
+    // statement, but oh well.
     format!(
-        "use {name}(::|;| as)|(^|\\W)({name})::|extern crate {name}( |;)",
+        "use {name}(::|;| as)|(^|\\W)({name})::|extern crate {name}( |;)|use \\{{\\s((?s).*(?-s)){name}\\s*as\\s*((?s).*(?-s))\\}};",
         name = crate_name
     )
 }
@@ -142,14 +146,18 @@ impl Search {
         let snaked = crate_name.replace('-', "_");
         let pattern = make_regexp(&snaked);
         let matcher = RegexMatcherBuilder::new()
-            .line_terminator(Some(b'\n'))
             .multi_line(true)
             .build(&pattern)?;
 
         let searcher = SearcherBuilder::new()
             .binary_detection(BinaryDetection::quit(b'\x00'))
+            .multi_line(true)
             .line_number(false)
             .build();
+
+        // Sanity-check: the matcher must allow multi-line searching.
+        debug_assert!(searcher.multi_line_with_matcher(&matcher));
+
         let sink = StopAfterFirstMatch::new();
 
         Ok(Self {
@@ -307,6 +315,37 @@ fn test_regexp() -> anyhow::Result<()> {
         r#"
 use std::fmt;
 bitflags::macro! {
+"#
+    )?);
+
+    // Compound `use as` statements. Here comes the nightmares...
+    assert!(test_one("log", "use { log as logging };")?);
+
+    assert!(test_one(
+        "log",
+        r#"
+use {
+    log as logging
+};
+"#
+    )?);
+
+    assert!(test_one(
+        "log",
+        r#"
+use { log as
+logging
+};
+"#
+    )?);
+
+    assert!(test_one(
+        "log",
+        r#"
+use { log
+    as
+        logging
+};
 "#
     )?);
 
