@@ -100,7 +100,7 @@ fn collect_paths(dir_path: &Path, analysis: &PackageAnalysis) -> Vec<PathBuf> {
 
     if root_paths.is_empty() {
         // Assume "src/" if cargo_toml didn't find anything.
-        root_paths.insert(dir_path.join("src"));
+        root_paths.insert(PathBuf::from("src"));
         trace!("adding src/ since paths was empty");
     }
 
@@ -127,7 +127,7 @@ fn collect_paths(dir_path: &Path, analysis: &PackageAnalysis) -> Vec<PathBuf> {
             {
                 return None;
             }
-            Some(dir_path.join(dir_entry.path()))
+            Some(dir_entry.path().to_owned())
         })
         .collect();
 
