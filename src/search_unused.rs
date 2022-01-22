@@ -28,6 +28,7 @@ impl PackageAnalysis {
         let metadata = cargo_metadata::MetadataCommand::new()
             .features(CargoOpt::AllFeatures)
             .manifest_path(cargo_path)
+            .other_options(["--frozen".to_owned()])
             .exec()?;
 
         Ok(Self {
@@ -214,7 +215,6 @@ pub(crate) fn find_unused(manifest_path: &Path) -> anyhow::Result<Option<Package
                 } else {
                     false
                 }
-                //node.id.repr == analysis.
             })
             .expect("the current package must be in the dependency graph")
             .deps;
@@ -223,7 +223,7 @@ pub(crate) fn find_unused(manifest_path: &Path) -> anyhow::Result<Option<Package
             .par_iter()
             .filter_map(|node_dep| {
                 let name = node_dep.name.clone();
-                let mut search = Search::new(name.as_str()).expect("constructing grep context ");
+                let mut search = Search::new(name.as_str()).expect("constructing grep context");
 
                 let mut found_once = false;
                 for path in &paths {
@@ -318,7 +318,7 @@ bitflags::macro! {
 "#
     )?);
 
-    // Compound `use as` statements. Here comes the nightmares...
+    // Compound `use as` statements. Here come the nightmares...
     assert!(test_one("log", "use { log as logging };")?);
 
     assert!(test_one(

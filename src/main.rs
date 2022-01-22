@@ -49,7 +49,7 @@ fn main() -> anyhow::Result<()> {
 
             Ok(None) => {
                 log::info!(
-                    "{} -- no package, must be a workspace",
+                    "{} is a virtual manifest for a workspace",
                     path.to_string_lossy()
                 );
                 None
