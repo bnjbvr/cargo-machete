@@ -28,7 +28,7 @@ impl PackageAnalysis {
         let metadata = cargo_metadata::MetadataCommand::new()
             .features(CargoOpt::AllFeatures)
             .manifest_path(cargo_path)
-            .other_options(["--frozen".to_owned()])
+            //.other_options(["--frozen".to_owned()]) // TODO causes errors in cargo-metadata
             .exec()?;
 
         Ok(Self {
