@@ -1,13 +1,10 @@
-use std::error;
-
 use dioxus::prelude::*;
 use grep::{
     regex::RegexMatcherBuilder,
-    searcher::{self, BinaryDetection, SearcherBuilder, Sink},
+    searcher::{self, BinaryDetection, SearcherBuilder},
 };
 
 fn main() {
-    pretty_env_logger::init();
     dioxus::desktop::launch(app);
 }
 
