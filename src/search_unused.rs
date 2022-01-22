@@ -50,7 +50,7 @@ fn make_regexp(crate_name: &str) -> String {
     // between. Will match the first `};` that it finds, which *should* be the end of the use
     // statement, but oh well.
     format!(
-        "use {name}(::|;| as)|(^|\\W)({name})::|extern crate {name}( |;)|use \\{{\\s((?s).*(?-s)){name}\\s*as\\s*((?s).*(?-s))\\}};",
+        "use {name}(::|;| as)|(^|\\W)({name})::|extern crate {name}( |;)|use \\{{\\s[^;]*log\\s*as\\s*[^;]*\\}};",
         name = crate_name
     )
 }
@@ -349,6 +349,16 @@ use { log
 "#
     )?);
 
+    assert!(test_one(
+        "log",
+        r#"
+use {
+    x::{ y },
+    log as logging,
+};
+"#
+    )?);
+
     // Regex must stop at the first };
     assert!(!test_one(
         "log",
@@ -362,7 +372,8 @@ fn main() {
         log as logging
     };
     func(42);
-} "#
+}
+"#
     )?);
 
     Ok(())
