@@ -13,7 +13,7 @@ use std::{
 use walkdir::WalkDir;
 
 pub(crate) struct PackageAnalysis {
-    metadata: cargo_metadata::Metadata,
+    metadata: Option<cargo_metadata::Metadata>,
     pub manifest: cargo_toml::Manifest,
     pub package_name: String,
     pub unused: Vec<String>,
@@ -24,12 +24,19 @@ impl PackageAnalysis {
         package_name: String,
         cargo_path: &Path,
         manifest: cargo_toml::Manifest,
+        with_cargo_metadata: bool,
     ) -> anyhow::Result<Self> {
-        let metadata = cargo_metadata::MetadataCommand::new()
-            .features(CargoOpt::AllFeatures)
-            .manifest_path(cargo_path)
-            //.other_options(["--frozen".to_owned()]) // TODO causes errors in cargo-metadata
-            .exec()?;
+        let metadata = if with_cargo_metadata {
+            Some(
+                cargo_metadata::MetadataCommand::new()
+                    .features(CargoOpt::AllFeatures)
+                    .manifest_path(cargo_path)
+                    //.other_options(["--frozen".to_owned()]) // TODO causes errors in cargo-metadata
+                    .exec()?,
+            )
+        } else {
+            None
+        };
 
         Ok(Self {
             metadata,
@@ -106,8 +113,7 @@ fn collect_paths(dir_path: &Path, analysis: &PackageAnalysis) -> Vec<PathBuf> {
     // Collect all final paths for the crate first.
     let paths: Vec<PathBuf> = root_paths
         .iter()
-        .map(|root| WalkDir::new(dir_path.join(root)).into_iter())
-        .flatten()
+        .flat_map(|root| WalkDir::new(dir_path.join(root)).into_iter())
         .filter_map(|result| {
             let dir_entry = match result {
                 Ok(dir_entry) => dir_entry,
@@ -183,7 +189,29 @@ impl Search {
     }
 }
 
-pub(crate) fn find_unused(manifest_path: &Path) -> anyhow::Result<Option<PackageAnalysis>> {
+#[derive(Clone, Copy)]
+pub(crate) enum UseCargoMetadata {
+    Yes,
+    No,
+}
+
+#[cfg(test)]
+impl UseCargoMetadata {
+    fn all() -> &'static [UseCargoMetadata] {
+        &[UseCargoMetadata::Yes, UseCargoMetadata::No]
+    }
+}
+
+impl From<UseCargoMetadata> for bool {
+    fn from(v: UseCargoMetadata) -> bool {
+        matches!(v, UseCargoMetadata::Yes)
+    }
+}
+
+pub(crate) fn find_unused(
+    manifest_path: &Path,
+    with_cargo_metadata: UseCargoMetadata,
+) -> anyhow::Result<Option<PackageAnalysis>> {
     let mut dir_path = manifest_path.to_path_buf();
     dir_path.pop();
 
@@ -197,59 +225,65 @@ pub(crate) fn find_unused(manifest_path: &Path) -> anyhow::Result<Option<Package
 
     debug!("handling {} ({})", package_name, dir_path.display());
 
-    let mut analysis = PackageAnalysis::new(package_name.clone(), manifest_path, manifest)?;
+    let mut analysis = PackageAnalysis::new(
+        package_name.clone(),
+        manifest_path,
+        manifest,
+        with_cargo_metadata.into(),
+    )?;
 
     let paths = collect_paths(&dir_path, &analysis);
 
     // TODO extend to dev dependencies + build dependencies, and be smarter in the grouping of
     // searched paths
-    if let Some(ref resolve) = analysis.metadata.resolve {
-        let deps = &resolve
+    let dependencies_names: Vec<_> = if let Some(resolve) = analysis
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.resolve.as_ref())
+    {
+        resolve
             .nodes
             .iter()
             .find(|node| {
-                // e.g. aa 0.1.0 (path+file:///tmp/aa)
-                if let Some(node_package_name) = node.id.repr.split(' ').next() {
-                    node_package_name == package_name
-                } else {
-                    false
-                }
+                // e.g. "aa 0.1.0 (path+file:///tmp/aa)"
+                node.id
+                    .repr
+                    .split(' ')
+                    .next() // e.g. "aa"
+                    .map_or(false, |node_package_name| node_package_name == package_name)
             })
             .expect("the current package must be in the dependency graph")
-            .deps;
+            .deps
+            .iter()
+            .map(|node_dep| node_dep.name.clone())
+            .collect()
+    } else {
+        analysis.manifest.dependencies.keys().cloned().collect()
+    };
 
-        analysis.unused = deps
-            .par_iter()
-            .filter_map(|node_dep| {
-                let name = node_dep.name.clone();
-                let mut search = Search::new(name.as_str()).expect("constructing grep context");
+    analysis.unused = dependencies_names
+        .into_par_iter()
+        .filter_map(|name| {
+            let mut search = Search::new(&name).expect("constructing grep context ");
 
-                let mut found_once = false;
-                for path in &paths {
-                    trace!("looking for {} in {}", name, path.to_string_lossy(),);
-                    match search.search_path(path) {
-                        Ok(true) => {
-                            trace!("> found once!");
-                            found_once = true;
-                            break;
-                        }
-                        Ok(false) => {
-                            trace!("> not found!");
-                        }
-                        Err(err) => {
-                            eprintln!("{}: {}", path.display(), err);
-                        }
-                    };
-                }
+            let mut found_once = false;
+            for path in &paths {
+                trace!("looking for {} in {}", name, path.to_string_lossy(),);
+                match search.search_path(path) {
+                    Ok(true) => {
+                        found_once = true;
+                        break;
+                    }
+                    Ok(false) => {}
+                    Err(err) => {
+                        eprintln!("{}: {}", path.display(), err);
+                    }
+                };
+            }
 
-                if !found_once {
-                    Some(name)
-                } else {
-                    None
-                }
-            })
-            .collect();
-    }
+            (!found_once).then(|| name)
+        })
+        .collect();
 
     Ok(Some(analysis))
 }
@@ -385,67 +419,76 @@ fn main() {
 #[cfg(test)]
 const TOP_LEVEL: &str = concat!(env!("CARGO_MANIFEST_DIR"));
 
-#[test]
-fn test_just_unused() -> anyhow::Result<()> {
-    // a crate that simply does not use a dependency it refers to
-    let analysis =
-        find_unused(&PathBuf::from(TOP_LEVEL).join("./integration-tests/just-unused/Cargo.toml"))?
-            .expect("no error during processing");
-    assert_eq!(analysis.unused, &["log".to_string()]);
-
-    Ok(())
+#[cfg(test)]
+fn check_analysis<F: Fn(PackageAnalysis)>(rel_path: &str, callback: F) {
+    for use_cargo_metadata in UseCargoMetadata::all() {
+        let analysis = find_unused(
+            &PathBuf::from(TOP_LEVEL).join(rel_path),
+            *use_cargo_metadata,
+        )
+        .expect("find_unused must return an Ok result")
+        .expect("no error during processing");
+        callback(analysis);
+    }
 }
 
 #[test]
-fn test_unused_transitive() -> anyhow::Result<()> {
+fn test_just_unused() {
+    // a crate that simply does not use a dependency it refers to
+    check_analysis("./integration-tests/just-unused/Cargo.toml", |analysis| {
+        assert_eq!(analysis.unused, &["log".to_string()]);
+    });
+}
+
+#[test]
+fn test_unused_transitive() {
     // lib1 has zero dependencies
-    let analysis = find_unused(
-        &PathBuf::from(TOP_LEVEL).join("./integration-tests/unused-transitive/lib1/Cargo.toml"),
-    )?
-    .expect("no error during processing");
-    assert!(analysis.unused.is_empty());
+    check_analysis(
+        "./integration-tests/unused-transitive/lib1/Cargo.toml",
+        |analysis| {
+            assert!(analysis.unused.is_empty());
+        },
+    );
 
     // lib2 effectively uses lib1
-    let analysis = find_unused(
-        &PathBuf::from(TOP_LEVEL).join("./integration-tests/unused-transitive/lib2/Cargo.toml"),
-    )?
-    .expect("no error during processing");
-    assert!(analysis.unused.is_empty());
+    check_analysis(
+        "./integration-tests/unused-transitive/lib2/Cargo.toml",
+        |analysis| {
+            assert!(analysis.unused.is_empty());
+        },
+    );
 
     // but top level references both lib1 and lib2, and only uses lib2
-    let analysis = find_unused(
-        &PathBuf::from(TOP_LEVEL).join("./integration-tests/unused-transitive/Cargo.toml"),
-    )?
-    .expect("no error during processing");
-    assert_eq!(analysis.unused, &["lib1".to_string()]);
-
-    Ok(())
+    check_analysis(
+        "./integration-tests/unused-transitive/Cargo.toml",
+        |analysis| {
+            assert_eq!(analysis.unused, &["lib1".to_string()]);
+        },
+    );
 }
 
 #[test]
-fn test_false_positive_macro_use() -> anyhow::Result<()> {
+fn test_false_positive_macro_use() {
     // when a lib uses a dependency via a macro, there's no way we can find it by scanning the
     // source code.
-    let analysis = find_unused(
-        &PathBuf::from(TOP_LEVEL).join("./integration-tests/false-positive-log/Cargo.toml"),
-    )?
-    .expect("no error during processing");
-    assert_eq!(analysis.unused, &["log".to_string()]);
-
-    Ok(())
+    check_analysis(
+        "./integration-tests/false-positive-log/Cargo.toml",
+        |analysis| {
+            assert_eq!(analysis.unused, &["log".to_string()]);
+        },
+    );
 }
 
 #[test]
-fn test_with_bench() -> anyhow::Result<()> {
+fn test_with_bench() {
     // when a package has a bench file designated by binary name, it seems that `cargo_toml`
     // doesn't fill in a default path to the source code.
-    let analysis = find_unused(
-        &PathBuf::from(TOP_LEVEL).join("./integration-tests/with-bench/bench/Cargo.toml"),
-    )?
-    .expect("no error during processing");
-    assert!(analysis.unused.is_empty());
-
-    Ok(())
+    check_analysis(
+        "./integration-tests/with-bench/bench/Cargo.toml",
+        |analysis| {
+            assert!(analysis.unused.is_empty());
+        },
+    );
 }
 
 #[test]
@@ -454,9 +497,18 @@ fn test_crate_renaming_works() -> anyhow::Result<()> {
     // positives.
     let analysis = find_unused(
         &PathBuf::from(TOP_LEVEL).join("./integration-tests/renaming-works/Cargo.toml"),
+        UseCargoMetadata::Yes,
     )?
     .expect("no error during processing");
     assert!(analysis.unused.is_empty());
+
+    // But when not using cargo-metadata, there's a false positive!
+    let analysis = find_unused(
+        &PathBuf::from(TOP_LEVEL).join("./integration-tests/renaming-works/Cargo.toml"),
+        UseCargoMetadata::No,
+    )?
+    .expect("no error during processing");
+    assert_eq!(analysis.unused, &["xml-rs".to_string()]);
 
     Ok(())
 }
