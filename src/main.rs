@@ -1,6 +1,6 @@
 mod search_unused;
 
-use crate::search_unused::find_unused;
+use crate::search_unused::{find_unused, UseCargoMetadata};
 use rayon::prelude::*;
 use std::{fs, path::PathBuf};
 use walkdir::WalkDir;
@@ -9,6 +9,7 @@ fn main() -> anyhow::Result<()> {
     pretty_env_logger::init();
 
     let mut fix = false;
+    let mut use_cargo_metadata = UseCargoMetadata::No;
 
     let mut path_str = Vec::new();
     let args = std::env::args();
@@ -24,22 +25,23 @@ fn main() -> anyhow::Result<()> {
 
         if arg == "--fix" || arg == "fix" {
             fix = true;
+        } else if arg == "--with-metadata" {
+            use_cargo_metadata = UseCargoMetadata::Yes;
         } else {
             path_str.push(arg);
         }
     }
 
-    let paths;
-    if path_str.is_empty() {
+    let paths = if path_str.is_empty() {
         eprintln!("Analyzing dependencies of crates in this directory...");
-        paths = vec![std::env::current_dir()?];
+        vec![std::env::current_dir()?]
     } else {
         eprintln!(
             "Analyzing dependencies of crates in {}...",
             path_str.join(",")
         );
-        paths = path_str.into_iter().map(PathBuf::from).collect();
-    }
+        path_str.into_iter().map(PathBuf::from).collect()
+    };
 
     for path in paths {
         // Find directory entries.
@@ -59,7 +61,7 @@ fn main() -> anyhow::Result<()> {
         // used by any Rust crate.
         let results = entries
             .par_iter()
-            .filter_map(|path| match find_unused(path) {
+            .filter_map(|path| match find_unused(path, use_cargo_metadata) {
                 Ok(Some(analysis)) => {
                     if analysis.unused.is_empty() {
                         None
