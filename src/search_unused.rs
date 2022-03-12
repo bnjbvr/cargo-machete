@@ -40,7 +40,7 @@ impl PackageAnalysis {
     }
 }
 
-fn make_regexp(crate_name: &str) -> String {
+fn make_regexp(name: &str) -> String {
     // Breaking down this regular expression: given a line,
     // - `use {name}(::|;| as)`: matches `use foo;`, `use foo::bar`, `use foo as bar;`.
     // - `(^|\\W)({name})::`: matches `foo::X`, but not `barfoo::X`. Note the `^` refers to the
@@ -51,9 +51,8 @@ fn make_regexp(crate_name: &str) -> String {
     // between. Will match the first `};` that it finds, which *should* be the end of the use
     // statement, but oh well.
     format!(
-        "use {name}(::|;| as)|(^|\\W)({name})::|extern crate {name}( |;)|use \\{{\\s[^;]*log\\s*as\\s*[^;]*\\}};",
-        name = crate_name
-    )
+        "use {name}(::|;| as)|(^|\\W)({name})::|extern crate {name}( |;)|use \\{{\\s[^;]*{name}\\s*as\\s*[^;]*\\}};"
+   )
 }
 
 /// Returns all the paths to the Rust source files for a crate contained at the given path.
@@ -230,10 +229,13 @@ pub(crate) fn find_unused(manifest_path: &Path) -> anyhow::Result<Option<Package
                     trace!("looking for {} in {}", name, path.to_string_lossy(),);
                     match search.search_path(path) {
                         Ok(true) => {
+                            trace!("> found once!");
                             found_once = true;
                             break;
                         }
-                        Ok(false) => {}
+                        Ok(false) => {
+                            trace!("> not found!");
+                        }
                         Err(err) => {
                             eprintln!("{}: {}", path.display(), err);
                         }
@@ -320,6 +322,7 @@ bitflags::macro! {
 
     // Compound `use as` statements. Here come the nightmares...
     assert!(test_one("log", "use { log as logging };")?);
+    assert!(!test_one("lol", "use { log as logging };")?);
 
     assert!(test_one(
         "log",
