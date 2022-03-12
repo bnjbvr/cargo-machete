@@ -11,6 +11,23 @@ struct MacheteArgs {
     paths: Vec<PathBuf>,
 }
 
+const HELP: &str = r#"cargo-machete: Helps find unused dependencies in a fast yet imprecise way.
+
+Example usage: cargo-machete [PATH1] [PATH2] [--flags]?
+
+Flags:
+
+    --help / -h: displays this help message.
+
+    --with-metadata: uses cargo-metadata to figure out the dependencies' names. May be useful if
+                     some dependencies are renamed from their own Cargo.toml file (e.g. xml-rs
+                     which gets renamed xml). Try it if you get false positives!
+
+    --fix: (beta) rewrite the Cargo.toml files to automatically remove unused dependencies.
+           Warning: this will likely entirely rewrite every dependency specification as a separate
+           block, and include more Cargo.toml fields in a way that's usually not desirable.
+"#;
+
 fn parse_args() -> anyhow::Result<MacheteArgs> {
     let mut fix = false;
     let mut use_cargo_metadata = UseCargoMetadata::No;
@@ -28,10 +45,17 @@ fn parse_args() -> anyhow::Result<MacheteArgs> {
             continue;
         }
 
+        if arg == "help" || arg == "-h" || arg == "--help" {
+            eprintln!("{}", HELP);
+            std::process::exit(0);
+        }
+
         if arg == "--fix" {
             fix = true;
         } else if arg == "--with-metadata" {
             use_cargo_metadata = UseCargoMetadata::Yes;
+        } else if arg.starts_with('-') {
+            anyhow::bail!("invalid parameter {arg}. Usage:\n{HELP}");
         } else {
             path_str.push(arg);
         }
