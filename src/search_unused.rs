@@ -12,9 +12,24 @@ use std::{
 };
 use walkdir::WalkDir;
 
+mod meta {
+    use serde::{Deserialize, Serialize};
+
+    #[derive(Serialize, Deserialize)]
+    pub struct PackageMetadata {
+        #[serde(rename = "cargo-machete")]
+        pub cargo_machete: Option<Ignored>,
+    }
+
+    #[derive(Serialize, Deserialize)]
+    pub struct Ignored {
+        pub ignored: Vec<String>,
+    }
+}
+
 pub(crate) struct PackageAnalysis {
     metadata: Option<cargo_metadata::Metadata>,
-    pub manifest: cargo_toml::Manifest,
+    pub manifest: cargo_toml::Manifest<meta::PackageMetadata>,
     pub package_name: String,
     pub unused: Vec<String>,
 }
@@ -23,7 +38,7 @@ impl PackageAnalysis {
     fn new(
         package_name: String,
         cargo_path: &Path,
-        manifest: cargo_toml::Manifest,
+        manifest: cargo_toml::Manifest<meta::PackageMetadata>,
         with_cargo_metadata: bool,
     ) -> anyhow::Result<Self> {
         let metadata = if with_cargo_metadata {
@@ -217,7 +232,7 @@ pub(crate) fn find_unused(
 
     trace!("trying to open {}...", manifest_path.display());
 
-    let manifest = cargo_toml::Manifest::from_path(manifest_path)?;
+    let manifest = cargo_toml::Manifest::from_path_with_metadata(manifest_path)?;
     let package_name = match manifest.package {
         Some(ref package) => package.name.clone(),
         None => return Ok(None),
@@ -236,7 +251,7 @@ pub(crate) fn find_unused(
 
     // TODO extend to dev dependencies + build dependencies, and be smarter in the grouping of
     // searched paths
-    let dependencies_names: Vec<_> = if let Some(resolve) = analysis
+    let mut dependencies_names: Vec<_> = if let Some(resolve) = analysis
         .metadata
         .as_ref()
         .and_then(|metadata| metadata.resolve.as_ref())
@@ -260,6 +275,23 @@ pub(crate) fn find_unused(
     } else {
         analysis.manifest.dependencies.keys().cloned().collect()
     };
+
+    if let Some(meta) = analysis
+        .manifest
+        .package
+        .as_ref()
+        .unwrap()
+        .metadata
+        .as_ref()
+    {
+        if let Some(cargo_machete) = meta.cargo_machete.as_ref() {
+            for ignore in cargo_machete.ignored.iter() {
+                if let Some(pos) = dependencies_names.iter().position(|x| x == ignore) {
+                    dependencies_names.remove(pos);
+                }
+            }
+        }
+    }
 
     analysis.unused = dependencies_names
         .into_par_iter()

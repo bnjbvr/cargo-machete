@@ -20,6 +20,7 @@ walkdir = "2.3.2"
 anyhow = "1.0.56"
 rayon = "1.5.1"
 cargo_metadata = "0.14.2"
+serde = "1"
 
 # Uncomment this for profiling.
 #[profile.release]
