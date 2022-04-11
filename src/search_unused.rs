@@ -544,3 +544,17 @@ fn test_crate_renaming_works() -> anyhow::Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn test_ignore_deps_works() -> anyhow::Result<()> {
+    // ensure that ignored deps listed in Cargo.toml package.metadata.cargo-machete.ignore are
+    // correctly ignored
+    let analysis = find_unused(
+        &PathBuf::from(TOP_LEVEL).join("./integration-tests/ignored-dep/Cargo.toml"),
+        UseCargoMetadata::Yes,
+    )?
+    .expect("no error during processing");
+    assert!(analysis.unused.is_empty());
+
+    Ok(())
+}
