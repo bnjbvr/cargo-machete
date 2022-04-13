@@ -1,3 +1,3 @@
 fn main() {
-    println!("Hello, world!");
+    log_once::warn_once!("Hello, world!");
 }

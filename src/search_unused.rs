@@ -276,6 +276,7 @@ pub(crate) fn find_unused(
         analysis.manifest.dependencies.keys().cloned().collect()
     };
 
+    // Remove known false positives.
     if let Some(meta) = analysis
         .manifest
         .package
@@ -546,15 +547,10 @@ fn test_crate_renaming_works() -> anyhow::Result<()> {
 }
 
 #[test]
-fn test_ignore_deps_works() -> anyhow::Result<()> {
+fn test_ignore_deps_works() {
     // ensure that ignored deps listed in Cargo.toml package.metadata.cargo-machete.ignore are
-    // correctly ignored
-    let analysis = find_unused(
-        &PathBuf::from(TOP_LEVEL).join("./integration-tests/ignored-dep/Cargo.toml"),
-        UseCargoMetadata::Yes,
-    )?
-    .expect("no error during processing");
-    assert!(analysis.unused.is_empty());
-
-    Ok(())
+    // correctly ignored.
+    check_analysis("./integration-tests/ignored-dep/Cargo.toml", |analysis| {
+        assert_eq!(analysis.unused, &["rand".to_string()]);
+    });
 }
