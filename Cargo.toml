@@ -15,12 +15,12 @@ cargo_toml = "0.11.5"
 grep = "0.2.8"
 log = "0.4.16"
 pretty_env_logger = "0.4.0"
-toml = "0.5.8"
+toml = "0.5.9"
 walkdir = "2.3.2"
-anyhow = "1.0.56"
-rayon = "1.5.1"
+anyhow = "1.0.57"
+rayon = "1.5.2"
 cargo_metadata = "0.14.2"
-serde = "1"
+serde = "1.0.136"
 
 # Uncomment this for profiling.
 #[profile.release]
