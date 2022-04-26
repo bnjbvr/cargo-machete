@@ -12,7 +12,13 @@
   </p>
 </div>
 
-## Writeup coming soon 🔜
+## Introduction
+
+`cargo-machete` is a Cargo tool that detects unused dependencies in Rust
+projects, in a fast (yet imprecise) way.
+
+See also the [blog post](https://blog.benj.me/2022/04/27/cargo-machete/) for a
+detailed writeup.
 
 ## Installation
 
