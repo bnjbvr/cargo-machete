@@ -26,6 +26,12 @@ Flags:
     --fix: (beta) rewrite the Cargo.toml files to automatically remove unused dependencies.
            Warning: this will likely entirely rewrite every dependency specification as a separate
            block, and include more Cargo.toml fields in a way that's usually not desirable.
+
+Exit code:
+
+    0:  when no unused dependencies are found
+    1:  when at least one unused (non-ignored) dependency is found
+    2:  on error
 "#;
 
 fn parse_args() -> anyhow::Result<MacheteArgs> {
@@ -79,9 +85,12 @@ fn parse_args() -> anyhow::Result<MacheteArgs> {
     })
 }
 
-fn main() -> anyhow::Result<()> {
+/// Runs `cargo-machete`.
+/// Returns Ok with a bool whether any unused dependencies were found, or Err on errors.
+fn run_machete() -> anyhow::Result<bool> {
     pretty_env_logger::init();
 
+    let mut has_unused_dependencies = false;
     let args = parse_args()?;
 
     for path in args.paths {
@@ -130,7 +139,8 @@ fn main() -> anyhow::Result<()> {
         for (mut analysis, path) in results {
             println!("{} -- {}:", analysis.package_name, path.to_string_lossy());
             for dep in &analysis.unused {
-                println!("\t{}", dep)
+                println!("\t{}", dep);
+                has_unused_dependencies = true; // any unused dependency is enough to set flag to true
             }
 
             if args.fix {
@@ -146,5 +156,15 @@ fn main() -> anyhow::Result<()> {
 
     eprintln!("Done!");
 
-    Ok(())
+    Ok(has_unused_dependencies)
+}
+
+fn main() {
+    let exit_code = match run_machete() {
+        Ok(false) => 0,
+        Ok(true) => 1,
+        Err(_) => 2,
+    };
+
+    std::process::exit(exit_code);
 }
