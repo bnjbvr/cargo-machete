@@ -1,7 +1,9 @@
 mod search_unused;
 
 use crate::search_unused::{find_unused, UseCargoMetadata};
+use anyhow::Context;
 use rayon::prelude::*;
+use std::str::FromStr;
 use std::{fs, path::PathBuf};
 use walkdir::WalkDir;
 
@@ -136,7 +138,7 @@ fn run_machete() -> anyhow::Result<bool> {
             .collect::<Vec<_>>();
 
         // Display all the results.
-        for (mut analysis, path) in results {
+        for (analysis, path) in results {
             println!("{} -- {}:", analysis.package_name, path.to_string_lossy());
             for dep in &analysis.unused {
                 println!("\t{}", dep);
@@ -144,12 +146,8 @@ fn run_machete() -> anyhow::Result<bool> {
             }
 
             if args.fix {
-                for dep in analysis.unused {
-                    analysis.manifest.dependencies.remove(&dep);
-                }
-                let serialized = toml::to_string(&analysis.manifest)
-                    .expect("error when converting updated manifest to toml");
-                fs::write(&path, serialized).expect("Cargo.toml write error");
+                let fixed = remove_dependencies(&fs::read_to_string(path)?, &analysis.unused)?;
+                fs::write(&path, fixed).expect("Cargo.toml write error");
             }
         }
     }
@@ -157,6 +155,26 @@ fn run_machete() -> anyhow::Result<bool> {
     eprintln!("Done!");
 
     Ok(has_unused_dependencies)
+}
+
+fn remove_dependencies(manifest: &str, dependencies_list: &[String]) -> anyhow::Result<String> {
+    let mut manifest = toml_edit::Document::from_str(manifest)?;
+    let dependencies = manifest
+        .iter_mut()
+        .filter(|x| x.1.is_table_like())
+        .filter(|(k, _)| k == "dependencies")
+        .next()
+        .context("no dependencies table found")?
+        .1
+        .as_table_mut()
+        .expect("Checked above");
+
+    for k in dependencies_list {
+        dependencies.remove(k).context("dependency not found")?;
+    }
+
+    let serialized = manifest.to_string();
+    Ok(serialized)
 }
 
 fn main() {
