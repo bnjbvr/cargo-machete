@@ -25,9 +25,9 @@ Flags:
                      some dependencies are renamed from their own Cargo.toml file (e.g. xml-rs
                      which gets renamed xml). Try it if you get false positives!
 
-    --fix: (beta) rewrite the Cargo.toml files to automatically remove unused dependencies.
-           Warning: this will likely entirely rewrite every dependency specification as a separate
-           block, and include more Cargo.toml fields in a way that's usually not desirable.
+    --fix: rewrite the Cargo.toml files to automatically remove unused dependencies.
+           Note: all dependencies flagged by cargo-machete will be removed, including false
+           positives.
 
 Exit code:
 
@@ -161,12 +161,11 @@ fn remove_dependencies(manifest: &str, dependencies_list: &[String]) -> anyhow::
     let mut manifest = toml_edit::Document::from_str(manifest)?;
     let dependencies = manifest
         .iter_mut()
-        .filter_map(|(k, v)| (v.is_table_like() && k == "dependencies").then(|| Some(v)))
-        .next()
-        .context("no dependencies table found")?
-        .context("dependencies table is empty")?
+        .find_map(|(k, v)| (v.is_table_like() && k == "dependencies").then(|| Some(v)))
+        .flatten()
+        .context("dependencies table is missing or empty")?
         .as_table_mut()
-        .context("It's a bug, please report it")?;
+        .context("unexpected missing table, please report with a test case on https://github.com/bnjbvr/cargo-machete")?;
 
     for k in dependencies_list {
         dependencies
