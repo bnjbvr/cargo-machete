@@ -3,7 +3,7 @@ name = "cargo-machete"
 edition = "2021"
 version = "0.2.0"
 description = "Find unused dependencies with this one weird trick!"
-authors = [ "Benjamin Bouvier <public@benj.me>" ]
+authors = ["Benjamin Bouvier <public@benj.me>"]
 repository = "https://github.com/bnjbvr/cargo-machete"
 keywords = []
 categories = []
@@ -15,12 +15,12 @@ cargo_toml = "0.11.5"
 grep = "0.2.8"
 log = "0.4.16"
 pretty_env_logger = "0.4.0"
-toml = "0.5.9"
 walkdir = "2.3.2"
 anyhow = "1.0.57"
 rayon = "1.5.2"
 cargo_metadata = "0.14.2"
 serde = "1.0.136"
+toml_edit = { version = "0.14.3", features = ["easy", "serde"] }
 
 # Uncomment this for profiling.
 #[profile.release]
