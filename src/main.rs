@@ -145,6 +145,10 @@ fn run_machete() -> anyhow::Result<bool> {
                 has_unused_dependencies = true; // any unused dependency is enough to set flag to true
             }
 
+            for dep in &analysis.ignored_used {
+                eprintln!("\t⚠️  {dep} was marked as ignored, but is actually used!");
+            }
+
             if args.fix {
                 let fixed = remove_dependencies(&fs::read_to_string(path)?, &analysis.unused)?;
                 fs::write(&path, fixed).expect("Cargo.toml write error");

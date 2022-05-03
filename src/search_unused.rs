@@ -32,6 +32,7 @@ pub(crate) struct PackageAnalysis {
     pub manifest: cargo_toml::Manifest<meta::PackageMetadata>,
     pub package_name: String,
     pub unused: Vec<String>,
+    pub ignored_used: Vec<String>,
 }
 
 impl PackageAnalysis {
@@ -58,6 +59,7 @@ impl PackageAnalysis {
             manifest,
             package_name,
             unused: Default::default(),
+            ignored_used: Default::default(),
         })
     }
 }
@@ -251,7 +253,7 @@ pub(crate) fn find_unused(
 
     // TODO extend to dev dependencies + build dependencies, and be smarter in the grouping of
     // searched paths
-    let mut dependencies_names: Vec<_> = if let Some(resolve) = analysis
+    let dependencies_names: Vec<_> = if let Some(resolve) = analysis
         .metadata
         .as_ref()
         .and_then(|metadata| metadata.resolve.as_ref())
@@ -276,28 +278,28 @@ pub(crate) fn find_unused(
         analysis.manifest.dependencies.keys().cloned().collect()
     };
 
-    // Remove known false positives.
-    if let Some(meta) = analysis
+    // Keep a side-list of ignored dependencies (likely false positives).
+    let ignored = analysis
         .manifest
         .package
         .as_ref()
         .unwrap()
         .metadata
         .as_ref()
-    {
-        if let Some(cargo_machete) = meta.cargo_machete.as_ref() {
-            for ignore in cargo_machete.ignored.iter() {
-                if let Some(pos) = dependencies_names.iter().position(|x| x == ignore) {
-                    dependencies_names.remove(pos);
-                }
-            }
-        }
+        .and_then(|meta| meta.cargo_machete.as_ref())
+        .map(|meta| meta.ignored.iter().collect::<HashSet<_>>());
+
+    enum SingleDepResult {
+        /// Dependency is unused and not marked as ignored.
+        Unused(String),
+        /// Dependency is marked as ignored but used.
+        IgnoredButUsed(String),
     }
 
-    analysis.unused = dependencies_names
+    let results: Vec<SingleDepResult> = dependencies_names
         .into_par_iter()
         .filter_map(|name| {
-            let mut search = Search::new(&name).expect("constructing grep context ");
+            let mut search = Search::new(&name).expect("constructing grep context");
 
             let mut found_once = false;
             for path in &paths {
@@ -314,9 +316,30 @@ pub(crate) fn find_unused(
                 };
             }
 
-            (!found_once).then(|| name)
+            if !found_once {
+                if let Some(ref ignored) = ignored {
+                    if ignored.contains(&name) {
+                        return None;
+                    }
+                }
+                Some(SingleDepResult::Unused(name))
+            } else {
+                if let Some(ref ignored) = ignored {
+                    if ignored.contains(&name) {
+                        return Some(SingleDepResult::IgnoredButUsed(name));
+                    }
+                }
+                None
+            }
         })
         .collect();
+
+    for result in results {
+        match result {
+            SingleDepResult::Unused(dep) => analysis.unused.push(dep),
+            SingleDepResult::IgnoredButUsed(dep) => analysis.ignored_used.push(dep),
+        }
+    }
 
     Ok(Some(analysis))
 }
@@ -552,5 +575,6 @@ fn test_ignore_deps_works() {
     // correctly ignored.
     check_analysis("./integration-tests/ignored-dep/Cargo.toml", |analysis| {
         assert_eq!(analysis.unused, &["rand".to_string()]);
+        assert_eq!(analysis.ignored_used, &["rand_core".to_string()]);
     });
 }
