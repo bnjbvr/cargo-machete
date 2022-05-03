@@ -161,16 +161,17 @@ fn remove_dependencies(manifest: &str, dependencies_list: &[String]) -> anyhow::
     let mut manifest = toml_edit::Document::from_str(manifest)?;
     let dependencies = manifest
         .iter_mut()
-        .filter(|x| x.1.is_table_like())
-        .filter(|(k, _)| k == "dependencies")
+        .filter_map(|(k, v)| (v.is_table_like() && k == "dependencies").then(|| Some(v)))
         .next()
         .context("no dependencies table found")?
-        .1
+        .context("dependencies table is empty")?
         .as_table_mut()
-        .expect("Checked above");
+        .context("It's a bug, please report it")?;
 
     for k in dependencies_list {
-        dependencies.remove(k).context("dependency not found")?;
+        dependencies
+            .remove(k)
+            .with_context(|| format!("Dependency {} not found", k))?;
     }
 
     let serialized = manifest.to_string();
