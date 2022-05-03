@@ -181,7 +181,10 @@ fn main() {
     let exit_code = match run_machete() {
         Ok(false) => 0,
         Ok(true) => 1,
-        Err(_) => 2,
+        Err(err) => {
+            eprintln!("Error: {err}");
+            2
+        }
     };
 
     std::process::exit(exit_code);
