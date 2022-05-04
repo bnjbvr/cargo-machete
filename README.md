@@ -59,7 +59,7 @@ names, more accurate dependencies per build type, etc. ⚠ This may modify the
 
 ## Contributing
 
-![Contributor Covenant](https://img.shields.io/badge/contributor%20covenant-v1.4-ff69b4.svg)
+[![Contributor Covenant](https://img.shields.io/badge/contributor%20covenant-v1.4-ff69b4.svg)](https://www.contributor-covenant.org/version/1/4/code-of-conduct/)
 
 We welcome community contributions to this project.
 
