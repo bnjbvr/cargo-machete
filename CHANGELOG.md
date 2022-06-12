@@ -1,3 +1,7 @@
+# 0.3.1 (released on 2022-06-12)
+
+- Support empty global prefix, e.g. `use ::log;`.
+
 # 0.3.0 (released on 2022-05-09)
 
 - Use exit code to signal if there are unused dependencies:
