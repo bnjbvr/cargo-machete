@@ -66,7 +66,8 @@ impl PackageAnalysis {
 
 fn make_regexp(name: &str) -> String {
     // Breaking down this regular expression: given a line,
-    // - `use {name}(::|;| as)`: matches `use foo;`, `use foo::bar`, `use foo as bar;`.
+    // - `use (::)?{name}(::|;| as)`: matches `use foo;`, `use foo::bar`, `use foo as bar;`, with
+    // an optional "::" in front of the crate's name.
     // - `(^|\\W)({name})::`: matches `foo::X`, but not `barfoo::X`. Note the `^` refers to the
     // beginning of the line (because of multi-line mode), not the beginning of the input.
     // - `extern crate {name}( |;)`: matches `extern crate foo`, or `extern crate foo as bar`.
@@ -75,7 +76,7 @@ fn make_regexp(name: &str) -> String {
     // between. Will match the first `};` that it finds, which *should* be the end of the use
     // statement, but oh well.
     format!(
-        "use {name}(::|;| as)|(^|\\W)({name})::|extern crate {name}( |;)|use \\{{\\s[^;]*{name}\\s*as\\s*[^;]*\\}};"
+        "use (::)?{name}(::|;| as)|(^|\\W)({name})::|extern crate {name}( |;)|use \\{{\\s[^;]*{name}\\s*as\\s*[^;]*\\}};"
    )
 }
 
@@ -392,8 +393,11 @@ fn test_regexp() -> anyhow::Result<()> {
     assert!(!test_one("log", "use log_once::info;")?);
     assert!(!test_one("log", "use flog::flag;")?);
     assert!(!test_one("log", "flog::flag;")?);
+    assert!(!test_one("log", "use ::flog;")?);
+    assert!(!test_one("log", "use :log;")?);
 
     assert!(test_one("log", "use log;")?);
+    assert!(test_one("log", "use ::log;")?);
     assert!(test_one("log", "use log::{self};")?);
     assert!(test_one("log", "use log::*;")?);
     assert!(test_one("log", "use log::info;")?);
