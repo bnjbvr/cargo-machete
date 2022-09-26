@@ -103,7 +103,7 @@ jobs:
               strip "target/${{ matrix.target }}/release/${{ matrix.bin }}"
           fi
           cp "target/${{ matrix.target }}/release/${{ matrix.bin }}" "$release_name/"
-          cp README.md LICENSE-APACHE LICENSE-MIT "$release_name/"
+          cp README.md LICENSE.md "$release_name/"
           tar czvf "$release_tar" "$release_name"
           rm -r "$release_name"
           # Windows environments in github actions don't have the gnu coreutils installed,
