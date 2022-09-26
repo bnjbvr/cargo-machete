@@ -94,7 +94,8 @@ jobs:
         shell: bash
         run: |
           name=cargo-machete
-          tag=$(git describe --tags --abbrev=0)
+          #tag=$(git describe --tags --abbrev=0)
+          tag="0.3.1"
           release_name="$name-$tag-${{ matrix.target }}"
           release_tar="${release_name}.tar.gz"
           mkdir "$release_name"
