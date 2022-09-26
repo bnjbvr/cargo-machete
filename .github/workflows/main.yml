@@ -2,7 +2,10 @@ name: Rust
 
 on:
   push:
-    branches: [ main ]
+    branches:
+      - main
+    tags:
+      - "*"
   pull_request:
     branches: [ main ]
 
@@ -45,3 +48,74 @@ jobs:
         with:
           command: test
           args: --all --verbose
+
+  # Code mutably borrowed from https://github.com/EmbarkStudios/cargo-deny/, thanks Embark!
+  release:
+    name: Release
+    #if: startsWith(github.ref, 'refs/tags/') # TODO reenable this before merging
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-20.04
+            rust: stable
+            target: x86_64-unknown-linux-musl
+            bin: cargo-machete
+          - os: windows-2022
+            rust: stable
+            target: x86_64-pc-windows-msvc
+            bin: cargo-machete.exe
+          - os: macos-11
+            rust: stable
+            target: x86_64-apple-darwin
+            bin: cargo-machete
+          - os: macos-11
+            rust: stable
+            target: aarch64-apple-darwin
+            bin: cargo-machete
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Install stable toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: ${{ matrix.rust }}
+          override: true
+          target: ${{ matrix.target }}
+      - name: Install musl tools
+        if: matrix.os == 'ubuntu-20.04'
+        run: |
+          sudo apt-get install -y musl-tools
+      - name: Checkout
+        uses: actions/checkout@v2
+      - name: cargo fetch
+        run: cargo fetch --target ${{ matrix.target }}
+      - name: Release build
+        run: cargo build --release --target ${{ matrix.target }}
+      - name: Package
+        shell: bash
+        run: |
+          name=cargo-machete
+          tag=$(git describe --tags --abbrev=0)
+          release_name="$name-$tag-${{ matrix.target }}"
+          release_tar="${release_name}.tar.gz"
+          mkdir "$release_name"
+          if [ "${{ matrix.target }}" != "x86_64-pc-windows-msvc" ]; then
+              strip "target/${{ matrix.target }}/release/${{ matrix.bin }}"
+          fi
+          cp "target/${{ matrix.target }}/release/${{ matrix.bin }}" "$release_name/"
+          cp README.md LICENSE-APACHE LICENSE-MIT "$release_name/"
+          tar czvf "$release_tar" "$release_name"
+          rm -r "$release_name"
+          # Windows environments in github actions don't have the gnu coreutils installed,
+          # which includes the shasum exe, so we just use powershell instead
+          if [ "${{ matrix.target }}" == "x86_64-pc-windows-msvc" ]; then
+            echo "(Get-FileHash \"${release_tar}\" -Algorithm SHA256).Hash | Out-File -Encoding ASCII -NoNewline \"${release_tar}.sha256\"" | pwsh -c -
+          else
+            echo -n "$(shasum -ba 256 "${release_tar}" | cut -d " " -f 1)" > "${release_tar}.sha256"
+          fi
+      - name: Publish
+        uses: softprops/action-gh-release@v1
+        with:
+          draft: true
+          files: "cargo-machete*"
+        env:
+          GITHUB_TOKEN: ${{ secrets.BOT_TOKEN }}
