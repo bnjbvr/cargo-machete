@@ -52,7 +52,7 @@ jobs:
   # Code mutably borrowed from https://github.com/EmbarkStudios/cargo-deny/, thanks Embark!
   release:
     name: Release
-    #if: startsWith(github.ref, 'refs/tags/') # TODO reenable this before merging
+    if: startsWith(github.ref, 'refs/tags/')
     strategy:
       matrix:
         include:
@@ -94,8 +94,7 @@ jobs:
         shell: bash
         run: |
           name=cargo-machete
-          #tag=$(git describe --tags --abbrev=0)
-          tag="0.3.1"
+          tag=$(git describe --tags --abbrev=0)
           release_name="$name-$tag-${{ matrix.target }}"
           release_tar="${release_name}.tar.gz"
           mkdir "$release_name"
