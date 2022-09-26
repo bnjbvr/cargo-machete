@@ -151,7 +151,7 @@ fn run_machete() -> anyhow::Result<bool> {
 
             if args.fix {
                 let fixed = remove_dependencies(&fs::read_to_string(path)?, &analysis.unused)?;
-                fs::write(&path, fixed).expect("Cargo.toml write error");
+                fs::write(path, fixed).expect("Cargo.toml write error");
             }
         }
     }
@@ -165,7 +165,7 @@ fn remove_dependencies(manifest: &str, dependencies_list: &[String]) -> anyhow::
     let mut manifest = toml_edit::Document::from_str(manifest)?;
     let dependencies = manifest
         .iter_mut()
-        .find_map(|(k, v)| (v.is_table_like() && k == "dependencies").then(|| Some(v)))
+        .find_map(|(k, v)| (v.is_table_like() && k == "dependencies").then_some(Some(v)))
         .flatten()
         .context("dependencies table is missing or empty")?
         .as_table_mut()
