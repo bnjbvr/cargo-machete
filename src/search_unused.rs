@@ -18,11 +18,13 @@ mod meta {
     #[derive(Serialize, Deserialize)]
     pub struct PackageMetadata {
         #[serde(rename = "cargo-machete")]
-        pub cargo_machete: Option<Ignored>,
+        pub cargo_machete: Option<MetadataFields>,
     }
 
     #[derive(Serialize, Deserialize)]
-    pub struct Ignored {
+    pub struct MetadataFields {
+        /// Crates triggering false positives in `cargo-machete`, which should not be reported as
+        /// unused.
         pub ignored: Vec<String>,
     }
 }
