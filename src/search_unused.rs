@@ -12,6 +12,9 @@ use std::{
 };
 use walkdir::WalkDir;
 
+#[cfg(test)]
+use crate::TOP_LEVEL;
+
 use self::meta::PackageMetadata;
 
 mod meta {
@@ -508,9 +511,6 @@ fn main() {
 }
 
 #[cfg(test)]
-const TOP_LEVEL: &str = concat!(env!("CARGO_MANIFEST_DIR"));
-
-#[cfg(test)]
 fn check_analysis<F: Fn(PackageAnalysis)>(rel_path: &str, callback: F) {
     for use_cargo_metadata in UseCargoMetadata::all() {
         let analysis = find_unused(
@@ -534,9 +534,12 @@ fn test_just_unused() {
 #[test]
 fn test_just_unused_with_manifest() {
     // a crate that does not use a dependency it refers to, and uses workspace properties
-    check_analysis("./integration-tests/workspace-package/program/Cargo.toml", |analysis| {
-        assert_eq!(analysis.unused, &["log".to_string()]);
-    });
+    check_analysis(
+        "./integration-tests/workspace-package/program/Cargo.toml",
+        |analysis| {
+            assert_eq!(analysis.unused, &["log".to_string()]);
+        },
+    );
 }
 
 #[test]
