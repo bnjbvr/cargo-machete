@@ -138,6 +138,18 @@ fn run_machete() -> anyhow::Result<bool> {
             .collect::<Vec<_>>();
 
         // Display all the results.
+        if results.is_empty() {
+            println!(
+                "cargo-machete didn't find any unused dependencies in {}. Good job!",
+                path.to_string_lossy()
+            );
+            continue;
+        }
+
+        println!(
+            "cargo-machete found the following unused dependencies in {}:",
+            path.to_string_lossy()
+        );
         for (analysis, path) in results {
             println!("{} -- {}:", analysis.package_name, path.to_string_lossy());
             for dep in &analysis.unused {
