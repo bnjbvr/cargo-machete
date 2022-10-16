@@ -12,6 +12,8 @@ use std::{
 };
 use walkdir::WalkDir;
 
+use self::meta::PackageMetadata;
+
 mod meta {
     use serde::{Deserialize, Serialize};
 
@@ -228,6 +230,32 @@ impl From<UseCargoMetadata> for bool {
     }
 }
 
+/// Read a manifest and try to find a workspace manifest to complete the data available in the
+/// manifest.
+///
+/// This will look up the file tree to find the Cargo.toml workspace manifest, assuming it's on a
+/// parent directory.
+fn get_full_manifest(
+    dir_path: &Path,
+    manifest_path: &Path,
+) -> anyhow::Result<cargo_toml::Manifest<PackageMetadata>> {
+    let mut manifest = cargo_toml::Manifest::from_path_with_metadata(manifest_path)?;
+
+    let mut dir_path = dir_path.join("../");
+    while dir_path.exists() {
+        let workspace_cargo_path = dir_path.join("Cargo.toml");
+        if let Ok(workspace_manifest) = cargo_toml::Manifest::from_path(&workspace_cargo_path) {
+            if manifest.workspace.is_some() {
+                manifest.inherit_workspace(&workspace_manifest, &workspace_cargo_path)?;
+                break;
+            }
+        }
+        dir_path = dir_path.join("../");
+    }
+
+    Ok(manifest)
+}
+
 pub(crate) fn find_unused(
     manifest_path: &Path,
     with_cargo_metadata: UseCargoMetadata,
@@ -237,7 +265,8 @@ pub(crate) fn find_unused(
 
     trace!("trying to open {}...", manifest_path.display());
 
-    let manifest = cargo_toml::Manifest::from_path_with_metadata(manifest_path)?;
+    let manifest = get_full_manifest(&dir_path, manifest_path)?;
+
     let package_name = match manifest.package {
         Some(ref package) => package.name.clone(),
         None => return Ok(None),
@@ -498,6 +527,14 @@ fn check_analysis<F: Fn(PackageAnalysis)>(rel_path: &str, callback: F) {
 fn test_just_unused() {
     // a crate that simply does not use a dependency it refers to
     check_analysis("./integration-tests/just-unused/Cargo.toml", |analysis| {
+        assert_eq!(analysis.unused, &["log".to_string()]);
+    });
+}
+
+#[test]
+fn test_just_unused_with_manifest() {
+    // a crate that does not use a dependency it refers to, and uses workspace properties
+    check_analysis("./integration-tests/workspace-package/program/Cargo.toml", |analysis| {
         assert_eq!(analysis.unused, &["log".to_string()]);
     });
 }
