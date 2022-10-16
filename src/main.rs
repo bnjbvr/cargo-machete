@@ -3,6 +3,7 @@ mod search_unused;
 use crate::search_unused::{find_unused, UseCargoMetadata};
 use anyhow::Context;
 use rayon::prelude::*;
+use std::path::Path;
 use std::str::FromStr;
 use std::{fs, path::PathBuf};
 use walkdir::WalkDir;
@@ -11,6 +12,7 @@ struct MacheteArgs {
     fix: bool,
     use_cargo_metadata: UseCargoMetadata,
     paths: Vec<PathBuf>,
+    skip_target_dir: bool,
 }
 
 const HELP: &str = r#"cargo-machete: Helps find unused dependencies in a fast yet imprecise way.
@@ -24,6 +26,8 @@ Flags:
     --with-metadata: uses cargo-metadata to figure out the dependencies' names. May be useful if
                      some dependencies are renamed from their own Cargo.toml file (e.g. xml-rs
                      which gets renamed xml). Try it if you get false positives!
+
+    --skip-target-dir: don't analyze anything contained in any target/ directories encountered.
 
     --fix: rewrite the Cargo.toml files to automatically remove unused dependencies.
            Note: all dependencies flagged by cargo-machete will be removed, including false
@@ -39,6 +43,7 @@ Exit code:
 fn parse_args() -> anyhow::Result<MacheteArgs> {
     let mut fix = false;
     let mut use_cargo_metadata = UseCargoMetadata::No;
+    let mut skip_target_dir = false;
 
     let mut path_str = Vec::new();
     let args = std::env::args();
@@ -62,6 +67,8 @@ fn parse_args() -> anyhow::Result<MacheteArgs> {
             fix = true;
         } else if arg == "--with-metadata" {
             use_cargo_metadata = UseCargoMetadata::Yes;
+        } else if arg == "--skip-target-dir" {
+            skip_target_dir = true;
         } else if arg.starts_with('-') {
             anyhow::bail!("invalid parameter {arg}. Usage:\n{HELP}");
         } else {
@@ -84,7 +91,33 @@ fn parse_args() -> anyhow::Result<MacheteArgs> {
         fix,
         use_cargo_metadata,
         paths,
+        skip_target_dir,
     })
+}
+
+fn collect_paths(path: &Path, skip_target_dir: bool) -> Vec<PathBuf> {
+    // Find directory entries.
+    let walker = WalkDir::new(path).into_iter();
+
+    let manifest_path_entries = if skip_target_dir {
+        walker
+            .filter_entry(|entry| !entry.path().ends_with("target"))
+            .collect()
+    } else {
+        walker.collect::<Vec<_>>()
+    };
+
+    manifest_path_entries
+        .into_iter()
+        .filter_map(|entry| match entry {
+            Ok(entry) if entry.file_name() == "Cargo.toml" => Some(entry.into_path()),
+            Err(err) => {
+                eprintln!("error when walking over subdirectories: {}", err);
+                None
+            }
+            _ => None,
+        })
+        .collect()
 }
 
 /// Runs `cargo-machete`.
@@ -96,45 +129,36 @@ fn run_machete() -> anyhow::Result<bool> {
     let args = parse_args()?;
 
     for path in args.paths {
-        // Find directory entries.
-        let entries = WalkDir::new(path)
-            .into_iter()
-            .filter_map(|entry| match entry {
-                Ok(entry) if entry.file_name() == "Cargo.toml" => Some(entry.into_path()),
-                Err(err) => {
-                    eprintln!("error when walking over subdirectories: {}", err);
-                    None
-                }
-                _ => None,
-            })
-            .collect::<Vec<_>>();
+        let manifest_path_entries = collect_paths(&path, args.skip_target_dir);
 
         // Run analysis in parallel. This will spawn new rayon tasks when dependencies are effectively
         // used by any Rust crate.
-        let results = entries
+        let results = manifest_path_entries
             .par_iter()
-            .filter_map(|path| match find_unused(path, args.use_cargo_metadata) {
-                Ok(Some(analysis)) => {
-                    if analysis.unused.is_empty() {
-                        None
-                    } else {
-                        Some((analysis, path))
+            .filter_map(
+                |manifest_path| match find_unused(manifest_path, args.use_cargo_metadata) {
+                    Ok(Some(analysis)) => {
+                        if analysis.unused.is_empty() {
+                            None
+                        } else {
+                            Some((analysis, manifest_path))
+                        }
                     }
-                }
 
-                Ok(None) => {
-                    log::info!(
-                        "{} is a virtual manifest for a workspace",
-                        path.to_string_lossy()
-                    );
-                    None
-                }
+                    Ok(None) => {
+                        log::info!(
+                            "{} is a virtual manifest for a workspace",
+                            manifest_path.to_string_lossy()
+                        );
+                        None
+                    }
 
-                Err(err) => {
-                    eprintln!("error when handling {}: {}", path.display(), err);
-                    None
-                }
-            })
+                    Err(err) => {
+                        eprintln!("error when handling {}: {}", manifest_path.display(), err);
+                        None
+                    }
+                },
+            )
             .collect::<Vec<_>>();
 
         // Display all the results.
@@ -204,4 +228,22 @@ fn main() {
     };
 
     std::process::exit(exit_code);
+}
+
+#[cfg(test)]
+const TOP_LEVEL: &str = concat!(env!("CARGO_MANIFEST_DIR"));
+
+#[test]
+fn test_ignore_target() {
+    let entries = collect_paths(
+        &PathBuf::from(TOP_LEVEL).join("./integration-tests/with-target/"),
+        true,
+    );
+    assert!(entries.is_empty());
+
+    let entries = collect_paths(
+        &PathBuf::from(TOP_LEVEL).join("./integration-tests/with-target/"),
+        false,
+    );
+    assert!(!entries.is_empty());
 }
