@@ -3,10 +3,10 @@ mod search_unused;
 use crate::search_unused::{find_unused, UseCargoMetadata};
 use anyhow::Context;
 use rayon::prelude::*;
+use std::ffi::{OsString, OsStr};
 use std::path::Path;
 use std::str::FromStr;
 use std::{fs, path::PathBuf};
-use walkdir::WalkDir;
 
 struct MacheteArgs {
     fix: bool,
@@ -95,29 +95,13 @@ fn parse_args() -> anyhow::Result<MacheteArgs> {
     })
 }
 
-fn collect_paths(path: &Path, skip_target_dir: bool) -> Vec<PathBuf> {
-    // Find directory entries.
-    let walker = WalkDir::new(path).into_iter();
-
-    let manifest_path_entries = if skip_target_dir {
-        walker
-            .filter_entry(|entry| !entry.path().ends_with("target"))
-            .collect()
-    } else {
-        walker.collect::<Vec<_>>()
-    };
-
-    manifest_path_entries
-        .into_iter()
-        .filter_map(|entry| match entry {
-            Ok(entry) if entry.file_name() == "Cargo.toml" => Some(entry.into_path()),
-            Err(err) => {
-                eprintln!("error when walking over subdirectories: {}", err);
-                None
-            }
-            _ => None,
-        })
-        .collect()
+fn build_toml_file_iterator(path: &Path, args: &MacheteArgs) -> impl Iterator<Item = Result<ignore::DirEntry, ignore::Error>> {
+    let mut walk_builder = ignore::WalkBuilder::new(path);
+    walk_builder.filter_entry(|entry| entry.file_name() == "Cargo.toml");
+    if args.skip_target_dir {
+        walk_builder.add_ignore("target/");
+    }
+    walk_builder.build()
 }
 
 /// Runs `cargo-machete`.
@@ -129,14 +113,27 @@ fn run_machete() -> anyhow::Result<bool> {
     let args = parse_args()?;
 
     for path in args.paths {
-        let manifest_path_entries = collect_paths(&path, args.skip_target_dir);
-
+        let toml_file_iter = build_toml_file_iterator(&path, &args);
+            
         // Run analysis in parallel. This will spawn new rayon tasks when dependencies are effectively
         // used by any Rust crate.
-        let results = manifest_path_entries
-            .par_iter()
+        let results = toml_file_iter
+            .filter_map(|entry| {
+                match entry {
+                    Ok(entry) => Some(entry.into_path()),
+                    Err(error) => {
+                        eprintln!("error when walking over subdirectories: {}", error);
+                        None
+                    }
+                }
+            })
+            // NOTE(mickvangelderen): Instead of building a parallel iterator through rayon, we
+            // could also use the parallel walker exposed by ignore. We will have to implement a
+            // visitor type to collect the analysis results though. I opted not to do this in the
+            // initial PR to limit the amount of changes.
+            .par_bridge()
             .filter_map(
-                |manifest_path| match find_unused(manifest_path, args.use_cargo_metadata) {
+                |ref manifest_path| match find_unused(manifest_path, args.use_cargo_metadata) {
                     Ok(Some(analysis)) => {
                         if analysis.unused.is_empty() {
                             None
