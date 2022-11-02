@@ -3,7 +3,6 @@ mod search_unused;
 use crate::search_unused::{find_unused, UseCargoMetadata};
 use anyhow::Context;
 use rayon::prelude::*;
-use std::ffi::{OsStr, OsString};
 use std::path::Path;
 use std::str::FromStr;
 use std::{fs, path::PathBuf};
@@ -95,18 +94,35 @@ fn parse_args() -> anyhow::Result<MacheteArgs> {
     })
 }
 
+fn is_target_dir(entry: &ignore::DirEntry) -> bool {
+    entry.file_type().map(|t| t.is_dir()).unwrap_or_default() && entry.file_name() == "target"
+}
+
+fn is_cargo_toml_file(entry: &ignore::DirEntry) -> bool {
+    entry.file_type().map(|t| t.is_file()).unwrap_or_default() && entry.file_name() == "Cargo.toml"
+}
+
 fn build_toml_file_iterator(
     path: &Path,
-    args: &MacheteArgs,
+    skip_target_dir: bool,
 ) -> impl Iterator<Item = Result<ignore::DirEntry, ignore::Error>> {
     let mut walk_builder = ignore::WalkBuilder::new(path);
-    walk_builder.filter_entry(|entry| entry.file_name() == "Cargo.toml");
-    if args.skip_target_dir {
-        if let Some(error) = walk_builder.add_ignore("target/") {
-            return Err(error);
-        }
+
+    // NOTE(mickvangelderen): This makes the skip_target_dir = false test pass, but I am not sure
+    // this is how we want to implement this. Perhaps we should add an argument to toggle usage of
+    // ignore files and modify the tests.
+    walk_builder.git_exclude(false);
+    walk_builder.git_global(false);
+    walk_builder.git_ignore(false);
+
+    if skip_target_dir {
+        walk_builder.filter_entry(|entry| !is_target_dir(entry));
     }
-    walk_builder.build()
+
+    // Emit only files named "Cargo.toml" while keeping all errors.
+    walk_builder
+        .build()
+        .filter(|result| result.as_ref().map(is_cargo_toml_file).unwrap_or_default())
 }
 
 /// Runs `cargo-machete`.
@@ -118,7 +134,7 @@ fn run_machete() -> anyhow::Result<bool> {
     let args = parse_args()?;
 
     for path in args.paths {
-        let toml_file_iter = build_toml_file_iterator(&path, &args);
+        let toml_file_iter = build_toml_file_iterator(&path, args.skip_target_dir);
 
         // Run analysis in parallel. This will spawn new rayon tasks when dependencies are effectively
         // used by any Rust crate.
@@ -135,8 +151,8 @@ fn run_machete() -> anyhow::Result<bool> {
             // visitor type to collect the analysis results though. I opted not to do this in the
             // initial PR to limit the amount of changes.
             .par_bridge()
-            .filter_map(|ref manifest_path| {
-                match find_unused(manifest_path, args.use_cargo_metadata) {
+            .filter_map(|manifest_path| {
+                match find_unused(&manifest_path, args.use_cargo_metadata) {
                     Ok(Some(analysis)) => {
                         if analysis.unused.is_empty() {
                             None
@@ -186,8 +202,8 @@ fn run_machete() -> anyhow::Result<bool> {
             }
 
             if args.fix {
-                let fixed = remove_dependencies(&fs::read_to_string(path)?, &analysis.unused)?;
-                fs::write(path, fixed).expect("Cargo.toml write error");
+                let fixed = remove_dependencies(&fs::read_to_string(&path)?, &analysis.unused)?;
+                fs::write(&path, fixed).expect("Cargo.toml write error");
             }
         }
     }
@@ -234,16 +250,19 @@ fn main() {
 const TOP_LEVEL: &str = concat!(env!("CARGO_MANIFEST_DIR"));
 
 #[test]
-fn test_ignore_target() {
-    let entries = collect_paths(
+fn target_dir_is_skipped_when_skip_target_dir_is_true() {
+    let entries = build_toml_file_iterator(
         &PathBuf::from(TOP_LEVEL).join("./integration-tests/with-target/"),
         true,
     );
-    assert!(entries.is_empty());
+    assert_eq!(entries.count(), 0);
+}
 
-    let entries = collect_paths(
+#[test]
+fn target_dir_is_not_skipped_when_skip_target_dir_is_false() {
+    let entries = build_toml_file_iterator(
         &PathBuf::from(TOP_LEVEL).join("./integration-tests/with-target/"),
         false,
     );
-    assert!(!entries.is_empty());
+    assert!(entries.count() > 0);
 }

@@ -10,7 +10,6 @@ use std::{
     error,
     path::{Path, PathBuf},
 };
-use walkdir::WalkDir;
 
 #[cfg(test)]
 use crate::TOP_LEVEL;
@@ -138,7 +137,7 @@ fn collect_paths(dir_path: &Path, analysis: &PackageAnalysis) -> Vec<PathBuf> {
     // Collect all final paths for the crate first.
     let paths: Vec<PathBuf> = root_paths
         .iter()
-        .flat_map(|root| WalkDir::new(dir_path.join(root)).into_iter())
+        .flat_map(|root| ignore::Walk::new(dir_path.join(root)).into_iter())
         .filter_map(|result| {
             let dir_entry = match result {
                 Ok(dir_entry) => dir_entry,
@@ -147,7 +146,11 @@ fn collect_paths(dir_path: &Path, analysis: &PackageAnalysis) -> Vec<PathBuf> {
                     return None;
                 }
             };
-            if !dir_entry.file_type().is_file() {
+            if !dir_entry
+                .file_type()
+                .map(|t| t.is_file())
+                .unwrap_or_default()
+            {
                 return None;
             }
             if dir_entry
