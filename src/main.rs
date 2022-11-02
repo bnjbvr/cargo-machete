@@ -3,7 +3,7 @@ mod search_unused;
 use crate::search_unused::{find_unused, UseCargoMetadata};
 use anyhow::Context;
 use rayon::prelude::*;
-use std::ffi::{OsString, OsStr};
+use std::ffi::{OsStr, OsString};
 use std::path::Path;
 use std::str::FromStr;
 use std::{fs, path::PathBuf};
@@ -95,7 +95,10 @@ fn parse_args() -> anyhow::Result<MacheteArgs> {
     })
 }
 
-fn build_toml_file_iterator(path: &Path, args: &MacheteArgs) -> impl Iterator<Item = Result<ignore::DirEntry, ignore::Error>> {
+fn build_toml_file_iterator(
+    path: &Path,
+    args: &MacheteArgs,
+) -> impl Iterator<Item = Result<ignore::DirEntry, ignore::Error>> {
     let mut walk_builder = ignore::WalkBuilder::new(path);
     walk_builder.filter_entry(|entry| entry.file_name() == "Cargo.toml");
     if args.skip_target_dir {
@@ -116,17 +119,15 @@ fn run_machete() -> anyhow::Result<bool> {
 
     for path in args.paths {
         let toml_file_iter = build_toml_file_iterator(&path, &args);
-            
+
         // Run analysis in parallel. This will spawn new rayon tasks when dependencies are effectively
         // used by any Rust crate.
         let results = toml_file_iter
-            .filter_map(|entry| {
-                match entry {
-                    Ok(entry) => Some(entry.into_path()),
-                    Err(error) => {
-                        eprintln!("error when walking over subdirectories: {}", error);
-                        None
-                    }
+            .filter_map(|entry| match entry {
+                Ok(entry) => Some(entry.into_path()),
+                Err(error) => {
+                    eprintln!("error when walking over subdirectories: {}", error);
+                    None
                 }
             })
             // NOTE(mickvangelderen): Instead of building a parallel iterator through rayon, we
@@ -134,8 +135,8 @@ fn run_machete() -> anyhow::Result<bool> {
             // visitor type to collect the analysis results though. I opted not to do this in the
             // initial PR to limit the amount of changes.
             .par_bridge()
-            .filter_map(
-                |ref manifest_path| match find_unused(manifest_path, args.use_cargo_metadata) {
+            .filter_map(|ref manifest_path| {
+                match find_unused(manifest_path, args.use_cargo_metadata) {
                     Ok(Some(analysis)) => {
                         if analysis.unused.is_empty() {
                             None
@@ -156,8 +157,8 @@ fn run_machete() -> anyhow::Result<bool> {
                         eprintln!("error when handling {}: {}", manifest_path.display(), err);
                         None
                     }
-                },
-            )
+                }
+            })
             .collect::<Vec<_>>();
 
         // Display all the results.
