@@ -99,7 +99,9 @@ fn build_toml_file_iterator(path: &Path, args: &MacheteArgs) -> impl Iterator<It
     let mut walk_builder = ignore::WalkBuilder::new(path);
     walk_builder.filter_entry(|entry| entry.file_name() == "Cargo.toml");
     if args.skip_target_dir {
-        walk_builder.add_ignore("target/");
+        if let Some(error) = walk_builder.add_ignore("target/") {
+            return Err(error);
+        }
     }
     walk_builder.build()
 }
