@@ -97,8 +97,12 @@ fn collect_paths(path: &Path, skip_target_dir: bool) -> Vec<PathBuf> {
 fn run_machete() -> anyhow::Result<bool> {
     pretty_env_logger::init();
 
-    let mut has_unused_dependencies = false;
-    let mut args: MacheteArgs = argh::from_env();
+    let mut args: MacheteArgs = if std::env::var("CARGO").is_ok() {
+        // Running as "cargo machete": remove the first argument.
+        argh::cargo_from_env()
+    } else {
+        argh::from_env()
+    };
 
     if args.paths.is_empty() {
         eprintln!("Analyzing dependencies of crates in this directory...");
@@ -114,6 +118,8 @@ fn run_machete() -> anyhow::Result<bool> {
                 .join(",")
         );
     }
+
+    let mut has_unused_dependencies = false;
 
     for path in args.paths {
         let manifest_path_entries = collect_paths(&path, args.skip_target_dir);
