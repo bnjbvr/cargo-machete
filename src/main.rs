@@ -92,13 +92,24 @@ fn collect_paths(path: &Path, skip_target_dir: bool) -> Vec<PathBuf> {
         .collect()
 }
 
+/// Return true if this is run as `cargo machete`, false otherwise (`cargo-machete`, `cargo run -- ...`)
+fn running_as_cargo_cmd() -> bool {
+    // If run under Cargo in general, a `CARGO` environment variable is set.
+    //
+    // But this is also set when running with `cargo run`, which we don't want to break! In that
+    // latter case, another set of cargo variables are defined, which aren't defined when just
+    // running as `cargo machete`. Picked `CARGO_PKG_NAME` as one of those variables.
+    //
+    // So we're running under cargo if `CARGO` is defined, but not `CARGO_PKG_NAME`.
+    std::env::var("CARGO").is_ok() && std::env::var("CARGO_PKG_NAME").is_err()
+}
+
 /// Runs `cargo-machete`.
 /// Returns Ok with a bool whether any unused dependencies were found, or Err on errors.
 fn run_machete() -> anyhow::Result<bool> {
     pretty_env_logger::init();
 
-    let mut args: MacheteArgs = if std::env::var("CARGO").is_ok() {
-        // Running as "cargo machete": remove the first argument.
+    let mut args: MacheteArgs = if running_as_cargo_cmd() {
         argh::cargo_from_env()
     } else {
         argh::from_env()
@@ -211,6 +222,9 @@ fn remove_dependencies(manifest: &str, dependencies_list: &[String]) -> anyhow::
 }
 
 fn main() {
+    for (k, v) in std::env::vars_os() {
+        println!("ENV: {} = {}", k.to_string_lossy(), v.to_string_lossy());
+    }
     let exit_code = match run_machete() {
         Ok(false) => 0,
         Ok(true) => 1,
