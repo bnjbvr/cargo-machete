@@ -222,9 +222,6 @@ fn remove_dependencies(manifest: &str, dependencies_list: &[String]) -> anyhow::
 }
 
 fn main() {
-    for (k, v) in std::env::vars_os() {
-        println!("ENV: {} = {}", k.to_string_lossy(), v.to_string_lossy());
-    }
     let exit_code = match run_machete() {
         Ok(false) => 0,
         Ok(true) => 1,
