@@ -13,6 +13,7 @@ use std::{
 };
 use walkdir::WalkDir;
 
+use crate::UseCargoMetadata;
 #[cfg(test)]
 use crate::TOP_LEVEL;
 
@@ -255,25 +256,6 @@ impl Search {
         self.try_singleline_then_multiline(|searcher, matcher, sink| {
             searcher.search_reader(matcher, s.as_bytes(), sink)
         })
-    }
-}
-
-#[derive(Clone, Copy)]
-pub(crate) enum UseCargoMetadata {
-    Yes,
-    No,
-}
-
-#[cfg(test)]
-impl UseCargoMetadata {
-    fn all() -> &'static [UseCargoMetadata] {
-        &[UseCargoMetadata::Yes, UseCargoMetadata::No]
-    }
-}
-
-impl From<UseCargoMetadata> for bool {
-    fn from(v: UseCargoMetadata) -> bool {
-        matches!(v, UseCargoMetadata::Yes)
     }
 }
 
