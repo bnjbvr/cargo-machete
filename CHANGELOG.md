@@ -1,3 +1,11 @@
+# Unreleased
+
+# 0.4.0 (released on 2022-10-16)
+
+- Added `--skip-target-dir` to not analyze `target/` directories.
+- Added a message indicating of any unused dependencies were found or not.
+- Support for workspace properties
+
 # 0.3.1 (released on 2022-06-12)
 
 - Support empty global prefix, e.g. `use ::log;`.
