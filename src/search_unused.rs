@@ -1,5 +1,6 @@
 use cargo_metadata::CargoOpt;
 use grep::{
+    matcher::LineTerminator,
     regex::{RegexMatcher, RegexMatcherBuilder},
     searcher::{self, BinaryDetection, Searcher, SearcherBuilder, Sink},
 };
@@ -7,7 +8,7 @@ use log::{debug, trace};
 use rayon::prelude::*;
 use std::{
     collections::HashSet,
-    error,
+    error::{self, Error},
     path::{Path, PathBuf},
 };
 use walkdir::WalkDir;
@@ -71,20 +72,25 @@ impl PackageAnalysis {
     }
 }
 
-fn make_regexp(name: &str) -> String {
+fn make_line_regexp(name: &str) -> String {
+    // Syntax documentation: https://docs.rs/regex/latest/regex/#syntax
+    //
     // Breaking down this regular expression: given a line,
     // - `use (::)?{name}(::|;| as)`: matches `use foo;`, `use foo::bar`, `use foo as bar;`, with
     // an optional "::" in front of the crate's name.
-    // - `(^|\\W)({name})::`: matches `foo::X`, but not `barfoo::X`. Note the `^` refers to the
-    // beginning of the line (because of multi-line mode), not the beginning of the input.
+    // - `\b({name})::`: matches `foo::X`, but not `barfoo::X`. `\b` means word boundary, so
+    // putting it before the crate's name ensures there's no polluting prefix.
     // - `extern crate {name}( |;)`: matches `extern crate foo`, or `extern crate foo as bar`.
-    // - `use \\{{\\s((?s).*(?-s)){name}\\s*as\\s*((?s).*(?-s))\\}};`: The Terrible One: tries to
-    // match compound use as statements, as in `use { X as Y };`, with possibly multiple-lines in
-    // between. Will match the first `};` that it finds, which *should* be the end of the use
-    // statement, but oh well.
-    format!(
-        "use (::)?{name}(::|;| as)|(^|\\W)({name})::|extern crate {name}( |;)|use \\{{\\s[^;]*{name}\\s*as\\s*[^;]*\\}};"
-   )
+    format!(r#"use (::)?{name}(::|;| as)|\b{name}::|extern crate {name}( |;)"#)
+}
+
+fn make_multiline_regexp(name: &str) -> String {
+    // Syntax documentation: https://docs.rs/regex/latest/regex/#syntax
+    //
+    // Breaking down this Terrible regular expression: tries to match compound `use as` statements,
+    // as in `use { X as Y };`, with possibly multiple-lines in between. Will match the first `};`
+    // that it finds, which *should* be the end of the use statement, but oh well.
+    format!(r#"use \{{\s[^;]*{name}\s*as\s*[^;]*\}};"#)
 }
 
 /// Returns all the paths to the Rust source files for a crate contained at the given path.
@@ -166,51 +172,89 @@ fn collect_paths(dir_path: &Path, analysis: &PackageAnalysis) -> Vec<PathBuf> {
     paths
 }
 
+/// Performs search of the given crate name with the following strategy: first try to use the line
+/// matcher, then the multiline matcher if the line matcher failed.
+///
+/// Splitting the single line matcher from the multiline matcher makes maintainance of the regular
+/// expressions simpler (oh well), and likely faster too since most use statements will be caught
+/// by the single line matcher.
 struct Search {
-    matcher: RegexMatcher,
-    searcher: Searcher,
+    line_matcher: RegexMatcher,
+    line_searcher: Searcher,
+    multiline_matcher: RegexMatcher,
+    multiline_searcher: Searcher,
     sink: StopAfterFirstMatch,
 }
 
 impl Search {
     fn new(crate_name: &str) -> anyhow::Result<Self> {
         let snaked = crate_name.replace('-', "_");
-        let pattern = make_regexp(&snaked);
-        let matcher = RegexMatcherBuilder::new()
-            .multi_line(true)
-            .build(&pattern)?;
 
-        let searcher = SearcherBuilder::new()
+        let line_matcher = RegexMatcher::new_line_matcher(&make_line_regexp(&snaked))?;
+        let line_searcher = SearcherBuilder::new()
+            .binary_detection(BinaryDetection::quit(b'\x00'))
+            .line_terminator(LineTerminator::byte(b'\n'))
+            .line_number(false)
+            .build();
+
+        let multiline_matcher = RegexMatcherBuilder::new()
+            .multi_line(true)
+            .build(&make_multiline_regexp(&snaked))?;
+        let multiline_searcher = SearcherBuilder::new()
             .binary_detection(BinaryDetection::quit(b'\x00'))
             .multi_line(true)
             .line_number(false)
             .build();
 
         // Sanity-check: the matcher must allow multi-line searching.
-        debug_assert!(searcher.multi_line_with_matcher(&matcher));
+        debug_assert!(multiline_searcher.multi_line_with_matcher(&multiline_matcher));
 
         let sink = StopAfterFirstMatch::new();
 
         Ok(Self {
-            matcher,
-            searcher,
+            line_matcher,
+            line_searcher,
+            multiline_matcher,
+            multiline_searcher,
             sink,
         })
     }
 
-    fn search_path(&mut self, path: &Path) -> Result<bool, anyhow::Error> {
-        self.searcher
-            .search_path(&self.matcher, path, &mut self.sink)
-            .map_err(|err| anyhow::anyhow!("when searching: {}", err))
-            .map(|_| self.sink.found)
+    fn try_singleline_then_multiline<
+        F: FnMut(&mut Searcher, &RegexMatcher, &mut StopAfterFirstMatch) -> Result<(), Box<dyn Error>>,
+    >(
+        &mut self,
+        mut func: F,
+    ) -> anyhow::Result<bool> {
+        match func(&mut self.line_searcher, &self.line_matcher, &mut self.sink) {
+            Ok(()) => {
+                if self.sink.found {
+                    return Ok(true);
+                }
+                // Single line matcher didn't work, try the multiline matcher now.
+                func(
+                    &mut self.multiline_searcher,
+                    &self.multiline_matcher,
+                    &mut self.sink,
+                )
+                .map_err(|err| anyhow::anyhow!("when searching with complex pattern: {err}"))
+                .map(|()| self.sink.found)
+            }
+            Err(err) => anyhow::bail!("when searching with line pattern: {err}"),
+        }
+    }
+
+    fn search_path(&mut self, path: &Path) -> anyhow::Result<bool> {
+        self.try_singleline_then_multiline(|searcher, matcher, sink| {
+            searcher.search_path(matcher, path, sink)
+        })
     }
 
     #[cfg(test)]
-    fn search_string(&mut self, s: &str) -> Result<bool, anyhow::Error> {
-        self.searcher
-            .search_reader(&self.matcher, s.as_bytes(), &mut self.sink)
-            .map_err(|err| anyhow::anyhow!("when searching: {}", err))
-            .map(|_| self.sink.found)
+    fn search_string(&mut self, s: &str) -> anyhow::Result<bool> {
+        self.try_singleline_then_multiline(|searcher, matcher, sink| {
+            searcher.search_reader(matcher, s.as_bytes(), sink)
+        })
     }
 }
 
@@ -395,9 +439,9 @@ impl Sink for StopAfterFirstMatch {
     fn matched(
         &mut self,
         _searcher: &searcher::Searcher,
-        mat: &searcher::SinkMatch<'_>,
+        matsh: &searcher::SinkMatch<'_>,
     ) -> Result<bool, Self::Error> {
-        let mat = String::from_utf8(mat.bytes().to_vec())?;
+        let mat = String::from_utf8(matsh.bytes().to_vec())?;
         let mat = mat.trim();
 
         if mat.starts_with("//") || mat.starts_with("//!") {
@@ -505,6 +549,27 @@ fn main() {
     func(42);
 }
 "#
+    )?);
+
+    // Regression test.
+    // Comments and spaces are meaningful here.
+    assert!(test_one(
+        "static_assertions",
+        r#"
+    // lol
+    static_assertions::assert_not_impl_all!(A: B);
+    "#
+    )?);
+
+    // Regression test.
+    // Comments and spaces are meaningful here.
+    assert!(test_one(
+        "futures",
+        r#"
+// the [`futures::executor::block_on`] function
+pub use futures::future;
+
+    "#
     )?);
 
     Ok(())
