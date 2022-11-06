@@ -1,5 +1,7 @@
 # Unreleased
 
+- *Breaking*: Use `argh` for parsing. Now, paths of directories to scan must be passed in the last
+  position, when running from the command line (#51).
 - Fix rare false positive and speed up most common case (#53).
 
 # 0.4.0 (released on 2022-10-16)
