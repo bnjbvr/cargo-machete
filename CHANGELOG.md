@@ -1,5 +1,7 @@
 # Unreleased
 
+- Fix rare false positive and speed up most common case (#53).
+
 # 0.4.0 (released on 2022-10-16)
 
 - Added `--skip-target-dir` to not analyze `target/` directories.
