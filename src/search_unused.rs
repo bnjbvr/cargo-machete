@@ -268,19 +268,27 @@ fn get_full_manifest(
     dir_path: &Path,
     manifest_path: &Path,
 ) -> anyhow::Result<cargo_toml::Manifest<PackageMetadata>> {
-    let mut manifest = cargo_toml::Manifest::from_path_with_metadata(manifest_path)?;
+    // HACK: we can't plain use `from_path_with_metadata` here, because it calls
+    // `complete_from_path` just a bit too early (before we've had a chance to call
+    // `inherit_workspace`). See https://gitlab.com/crates.rs/cargo_toml/-/issues/20 for details,
+    // and a possible future fix.
+    let cargo_toml_content = std::fs::read(manifest_path)?;
+    let mut manifest =
+        cargo_toml::Manifest::<PackageMetadata>::from_slice_with_metadata(&cargo_toml_content)?;
 
     let mut dir_path = dir_path.join("../");
     while dir_path.exists() {
         let workspace_cargo_path = dir_path.join("Cargo.toml");
         if let Ok(workspace_manifest) = cargo_toml::Manifest::from_path(&workspace_cargo_path) {
-            if manifest.workspace.is_some() {
+            if workspace_manifest.workspace.is_some() {
                 manifest.inherit_workspace(&workspace_manifest, &workspace_cargo_path)?;
                 break;
             }
         }
         dir_path = dir_path.join("../");
     }
+
+    manifest.complete_from_path(manifest_path)?;
 
     Ok(manifest)
 }
