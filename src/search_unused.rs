@@ -22,13 +22,13 @@ use self::meta::PackageMetadata;
 mod meta {
     use serde::{Deserialize, Serialize};
 
-    #[derive(Serialize, Deserialize)]
+    #[derive(Serialize, Deserialize, Default)]
     pub struct PackageMetadata {
         #[serde(rename = "cargo-machete")]
         pub cargo_machete: Option<MetadataFields>,
     }
 
-    #[derive(Serialize, Deserialize)]
+    #[derive(Serialize, Deserialize, Default)]
     pub struct MetadataFields {
         /// Crates triggering false positives in `cargo-machete`, which should not be reported as
         /// unused.
@@ -279,9 +279,31 @@ fn get_full_manifest(
     let mut dir_path = dir_path.join("../");
     while dir_path.exists() {
         let workspace_cargo_path = dir_path.join("Cargo.toml");
-        if let Ok(workspace_manifest) = cargo_toml::Manifest::from_path(&workspace_cargo_path) {
-            if workspace_manifest.workspace.is_some() {
+        if let Ok(workspace_manifest) =
+            cargo_toml::Manifest::<PackageMetadata>::from_path_with_metadata(&workspace_cargo_path)
+        {
+            if let Some(workspace) = &workspace_manifest.workspace {
                 manifest.inherit_workspace(&workspace_manifest, &workspace_cargo_path)?;
+
+                // Look for `workspace.metadata.cargo-machete.ignored` in the workspace Cargo.toml,
+                // whose content will be added to `package.metadata.cargo-machete.ignored` if this
+                // package.
+                let workspace_ignored = workspace
+                    .metadata
+                    .as_ref()
+                    .and_then(|metadata| metadata.cargo_machete.as_ref())
+                    .and_then(|machete| Some(&machete.ignored));
+
+                if let (Some(workspace_ignored), Some(package)) =
+                    (workspace_ignored, manifest.package.as_mut())
+                {
+                    let metadata = package.metadata.get_or_insert_with(|| Default::default());
+                    let machete = metadata
+                        .cargo_machete
+                        .get_or_insert_with(|| Default::default());
+                    machete.ignored.extend_from_slice(&workspace_ignored);
+                }
+
                 break;
             }
         }
@@ -678,4 +700,17 @@ fn test_ignore_deps_works() {
         assert_eq!(analysis.unused, &["rand".to_string()]);
         assert_eq!(analysis.ignored_used, &["rand_core".to_string()]);
     });
+}
+
+#[test]
+fn test_ignore_deps_workspace_works() {
+    // ensure that ignored deps listed in Cargo.toml workspace.metadata.cargo-machete.ignore are
+    // correctly ignored.
+    check_analysis(
+        "./integration-tests/ignored-dep-workspace/inner/Cargo.toml",
+        |analysis| {
+            assert_eq!(analysis.unused, &["rand".to_string()]);
+            assert_eq!(analysis.ignored_used, &["rand_core".to_string()]);
+        },
+    );
 }

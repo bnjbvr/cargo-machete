@@ -1,0 +1,19 @@
+[package]
+name = "ignored-dep"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+log-once = "0.3.1"
+rand = "0.8.5"
+rand_core = "0.6.3"
+lazy_static = "1.4.0"
+serde.workspace = true
+
+[package.metadata.cargo-machete]
+ignored = [
+    "log",
+    "rand_core" # actually used, should cause a warning
+]
