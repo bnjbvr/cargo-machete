@@ -150,7 +150,7 @@ fn collect_paths(dir_path: &Path, analysis: &PackageAnalysis) -> Vec<PathBuf> {
             let dir_entry = match result {
                 Ok(dir_entry) => dir_entry,
                 Err(err) => {
-                    eprintln!("{}", err);
+                    eprintln!("{err}");
                     return None;
                 }
             };
@@ -168,7 +168,7 @@ fn collect_paths(dir_path: &Path, analysis: &PackageAnalysis) -> Vec<PathBuf> {
         })
         .collect();
 
-    trace!("found transitive paths: {:?}", paths);
+    trace!("found transitive paths: {paths:?}");
 
     paths
 }
@@ -267,7 +267,7 @@ impl Search {
 fn get_full_manifest(
     dir_path: &Path,
     manifest_path: &Path,
-) -> anyhow::Result<cargo_toml::Manifest<PackageMetadata>> {
+) -> anyhow::Result<(cargo_toml::Manifest<PackageMetadata>, Vec<String>)> {
     // HACK: we can't plain use `from_path_with_metadata` here, because it calls
     // `complete_from_path` just a bit too early (before we've had a chance to call
     // `inherit_workspace`). See https://gitlab.com/crates.rs/cargo_toml/-/issues/20 for details,
@@ -276,12 +276,27 @@ fn get_full_manifest(
     let mut manifest =
         cargo_toml::Manifest::<PackageMetadata>::from_slice_with_metadata(&cargo_toml_content)?;
 
+    let mut workspace_ignored = vec![];
+
     let mut dir_path = dir_path.join("../");
     while dir_path.exists() {
         let workspace_cargo_path = dir_path.join("Cargo.toml");
-        if let Ok(workspace_manifest) = cargo_toml::Manifest::from_path(&workspace_cargo_path) {
-            if workspace_manifest.workspace.is_some() {
+        if let Ok(workspace_manifest) =
+            cargo_toml::Manifest::<PackageMetadata>::from_path_with_metadata(&workspace_cargo_path)
+        {
+            if let Some(workspace) = &workspace_manifest.workspace {
                 manifest.inherit_workspace(&workspace_manifest, &workspace_cargo_path)?;
+
+                // Look for `workspace.metadata.cargo-machete.ignored` in the workspace Cargo.toml.
+                if let Some(ignored) = workspace
+                    .metadata
+                    .as_ref()
+                    .and_then(|metadata| metadata.cargo_machete.as_ref())
+                    .map(|machete| &machete.ignored)
+                {
+                    workspace_ignored = ignored.clone();
+                }
+
                 break;
             }
         }
@@ -290,7 +305,7 @@ fn get_full_manifest(
 
     manifest.complete_from_path(manifest_path)?;
 
-    Ok(manifest)
+    Ok((manifest, workspace_ignored))
 }
 
 pub(crate) fn find_unused(
@@ -302,7 +317,7 @@ pub(crate) fn find_unused(
 
     trace!("trying to open {}...", manifest_path.display());
 
-    let manifest = get_full_manifest(&dir_path, manifest_path)?;
+    let (manifest, workspace_ignored) = get_full_manifest(&dir_path, manifest_path)?;
 
     let package_name = match manifest.package {
         Some(ref package) => package.name.clone(),
@@ -352,11 +367,12 @@ pub(crate) fn find_unused(
         .manifest
         .package
         .as_ref()
-        .unwrap()
-        .metadata
-        .as_ref()
+        .and_then(|package| package.metadata.as_ref())
         .and_then(|meta| meta.cargo_machete.as_ref())
-        .map(|meta| meta.ignored.iter().collect::<HashSet<_>>());
+        .map(|meta| meta.ignored.iter().collect::<HashSet<_>>())
+        .unwrap_or_default();
+
+    let workspace_ignored: HashSet<_> = workspace_ignored.into_iter().collect();
 
     enum SingleDepResult {
         /// Dependency is unused and not marked as ignored.
@@ -386,18 +402,16 @@ pub(crate) fn find_unused(
             }
 
             if !found_once {
-                if let Some(ref ignored) = ignored {
-                    if ignored.contains(&name) {
-                        return None;
-                    }
+                if ignored.contains(&name) || workspace_ignored.contains(&name) {
+                    return None;
                 }
+
                 Some(SingleDepResult::Unused(name))
             } else {
-                if let Some(ref ignored) = ignored {
-                    if ignored.contains(&name) {
-                        return Some(SingleDepResult::IgnoredButUsed(name));
-                    }
+                if ignored.contains(&name) {
+                    return Some(SingleDepResult::IgnoredButUsed(name));
                 }
+
                 None
             }
         })
@@ -678,4 +692,17 @@ fn test_ignore_deps_works() {
         assert_eq!(analysis.unused, &["rand".to_string()]);
         assert_eq!(analysis.ignored_used, &["rand_core".to_string()]);
     });
+}
+
+#[test]
+fn test_ignore_deps_workspace_works() {
+    // ensure that ignored deps listed in Cargo.toml workspace.metadata.cargo-machete.ignore are
+    // correctly ignored.
+    check_analysis(
+        "./integration-tests/ignored-dep-workspace/inner/Cargo.toml",
+        |analysis| {
+            assert_eq!(analysis.unused, &["rand".to_string()]);
+            assert_eq!(analysis.ignored_used, &["rand_core".to_string()]);
+        },
+    );
 }

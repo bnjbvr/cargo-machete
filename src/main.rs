@@ -84,7 +84,7 @@ fn collect_paths(path: &Path, skip_target_dir: bool) -> Vec<PathBuf> {
         .filter_map(|entry| match entry {
             Ok(entry) if entry.file_name() == "Cargo.toml" => Some(entry.into_path()),
             Err(err) => {
-                eprintln!("error when walking over subdirectories: {}", err);
+                eprintln!("error when walking over subdirectories: {err}");
                 None
             }
             _ => None,
@@ -181,7 +181,7 @@ fn run_machete() -> anyhow::Result<bool> {
         for (analysis, path) in results {
             println!("{} -- {}:", analysis.package_name, path.to_string_lossy());
             for dep in &analysis.unused {
-                println!("\t{}", dep);
+                println!("\t{dep}");
                 has_unused_dependencies = true; // any unused dependency is enough to set flag to true
             }
 
@@ -214,7 +214,7 @@ fn remove_dependencies(manifest: &str, dependencies_list: &[String]) -> anyhow::
     for k in dependencies_list {
         dependencies
             .remove(k)
-            .with_context(|| format!("Dependency {} not found", k))?;
+            .with_context(|| format!("Dependency {k} not found"))?;
     }
 
     let serialized = manifest.to_string();
