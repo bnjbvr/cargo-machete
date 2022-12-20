@@ -22,13 +22,13 @@ use self::meta::PackageMetadata;
 mod meta {
     use serde::{Deserialize, Serialize};
 
-    #[derive(Serialize, Deserialize, Default)]
+    #[derive(Serialize, Deserialize)]
     pub struct PackageMetadata {
         #[serde(rename = "cargo-machete")]
         pub cargo_machete: Option<MetadataFields>,
     }
 
-    #[derive(Serialize, Deserialize, Default)]
+    #[derive(Serialize, Deserialize)]
     pub struct MetadataFields {
         /// Crates triggering false positives in `cargo-machete`, which should not be reported as
         /// unused.
