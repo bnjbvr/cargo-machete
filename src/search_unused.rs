@@ -150,7 +150,7 @@ fn collect_paths(dir_path: &Path, analysis: &PackageAnalysis) -> Vec<PathBuf> {
             let dir_entry = match result {
                 Ok(dir_entry) => dir_entry,
                 Err(err) => {
-                    eprintln!("{}", err);
+                    eprintln!("{err}");
                     return None;
                 }
             };
@@ -168,7 +168,7 @@ fn collect_paths(dir_path: &Path, analysis: &PackageAnalysis) -> Vec<PathBuf> {
         })
         .collect();
 
-    trace!("found transitive paths: {:?}", paths);
+    trace!("found transitive paths: {paths:?}");
 
     paths
 }
