@@ -1,0 +1,24 @@
+[package]
+name = "feature-dep"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+log = "0.4.14"
+log-once = "0.3.1"
+rand = "0.8.5"
+rand_core = "0.6.3"
+serde = "1"
+
+[features]
+# `example` feature enable a feature in `serde`, thus `serde` should not be
+# considered unused even if it is not used in the code.
+example = ["serde/derive"]
+
+[package.metadata.cargo-machete]
+ignored = [
+    "log",
+    "rand_core" # actually used, should cause a warning
+]

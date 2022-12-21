@@ -1,4 +1,5 @@
 use cargo_metadata::CargoOpt;
+use cargo_toml::Manifest;
 use grep::{
     matcher::LineTerminator,
     regex::{RegexMatcher, RegexMatcherBuilder},
@@ -308,6 +309,24 @@ fn get_full_manifest(
     Ok((manifest, workspace_ignored))
 }
 
+fn extract_dependencies_used_in_features(manifest: &Manifest<PackageMetadata>) -> HashSet<String> {
+    manifest
+        .features
+        .values()
+        .flat_map(|feature| feature.iter())
+        .filter_map(|element| {
+            let mut split = element.split('/');
+            let left = split.next()?;
+            // if there is a second part this is a feature dependency of the
+            // form `crate(?)/feature`, for which we want `crate` to not be
+            // considered unused.
+            let _ = split.next()?;
+
+            Some(left.trim_end_matches('?').to_owned())
+        })
+        .collect()
+}
+
 pub(crate) fn find_unused(
     manifest_path: &Path,
     with_cargo_metadata: UseCargoMetadata,
@@ -318,6 +337,7 @@ pub(crate) fn find_unused(
     trace!("trying to open {}...", manifest_path.display());
 
     let (manifest, workspace_ignored) = get_full_manifest(&dir_path, manifest_path)?;
+    let feature_dependencies = extract_dependencies_used_in_features(&manifest);
 
     let package_name = match manifest.package {
         Some(ref package) => package.name.clone(),
@@ -402,7 +422,10 @@ pub(crate) fn find_unused(
             }
 
             if !found_once {
-                if ignored.contains(&name) || workspace_ignored.contains(&name) {
+                if ignored.contains(&name)
+                    || workspace_ignored.contains(&name)
+                    || feature_dependencies.contains(&name)
+                {
                     return None;
                 }
 
@@ -705,4 +728,14 @@ fn test_ignore_deps_workspace_works() {
             assert_eq!(analysis.ignored_used, &["rand_core".to_string()]);
         },
     );
+}
+
+#[test]
+fn test_feature_dep_works() {
+    // ensure that `serde` is not considered ignored as a feature of the crate
+    // enables one of `serde` features.
+    check_analysis("./integration-tests/feature-dep/Cargo.toml", |analysis| {
+        assert_eq!(analysis.unused, &["rand".to_string()]);
+        assert_eq!(analysis.ignored_used, &["rand_core".to_string()]);
+    });
 }
