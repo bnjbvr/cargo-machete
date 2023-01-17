@@ -67,7 +67,7 @@ struct MacheteArgs {
     paths: Vec<PathBuf>,
 }
 
-fn collect_paths(path: &Path, skip_target_dir: bool) -> Vec<PathBuf> {
+fn collect_paths(path: &Path, skip_target_dir: bool) -> Result<Vec<PathBuf>, walkdir::Error> {
     // Find directory entries.
     let walker = WalkDir::new(path).into_iter();
 
@@ -79,16 +79,15 @@ fn collect_paths(path: &Path, skip_target_dir: bool) -> Vec<PathBuf> {
         walker.collect::<Vec<_>>()
     };
 
+    // Keep only errors and `Cargo.toml` files (filter), then map correct paths into owned
+    // `PathBuf`.
     manifest_path_entries
         .into_iter()
-        .filter_map(|entry| match entry {
-            Ok(entry) if entry.file_name() == "Cargo.toml" => Some(entry.into_path()),
-            Err(err) => {
-                eprintln!("error when walking over subdirectories: {err}");
-                None
-            }
-            _ => None,
+        .filter(|entry| match entry {
+            Ok(entry) => entry.file_name() == "Cargo.toml",
+            Err(_) => true,
         })
+        .map(|res_entry| res_entry.map(|e| e.into_path()))
         .collect()
 }
 
@@ -131,9 +130,16 @@ fn run_machete() -> anyhow::Result<bool> {
     }
 
     let mut has_unused_dependencies = false;
+    let mut walkdir_errors = Vec::new();
 
     for path in args.paths {
-        let manifest_path_entries = collect_paths(&path, args.skip_target_dir);
+        let manifest_path_entries = match collect_paths(&path, args.skip_target_dir) {
+            Ok(entries) => entries,
+            Err(err) => {
+                walkdir_errors.push(err);
+                continue;
+            }
+        };
 
         // Run analysis in parallel. This will spawn new rayon tasks when dependencies are effectively
         // used by any Rust crate.
@@ -198,6 +204,17 @@ fn run_machete() -> anyhow::Result<bool> {
 
     eprintln!("Done!");
 
+    if !walkdir_errors.is_empty() {
+        anyhow::bail!(
+            "Errors when walking over directories:\n{}",
+            walkdir_errors
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+    }
+
     Ok(has_unused_dependencies)
 }
 
@@ -243,11 +260,11 @@ fn test_ignore_target() {
         &PathBuf::from(TOP_LEVEL).join("./integration-tests/with-target/"),
         true,
     );
-    assert!(entries.is_empty());
+    assert!(entries.unwrap().is_empty());
 
     let entries = collect_paths(
         &PathBuf::from(TOP_LEVEL).join("./integration-tests/with-target/"),
         false,
     );
-    assert!(!entries.is_empty());
+    assert!(!entries.unwrap().is_empty());
 }
