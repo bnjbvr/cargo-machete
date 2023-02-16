@@ -20,7 +20,7 @@ log = "0.4.16"
 pretty_env_logger = "0.4.0"
 rayon = "1.5.2"
 serde = "1.0.136"
-toml_edit = { version = "0.14.3", features = ["easy", "serde"] }
+toml_edit = "0.19.3"
 walkdir = "2.3.2"
 
 # Uncomment this for profiling.
