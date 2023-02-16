@@ -285,8 +285,6 @@ fn get_full_manifest(
             cargo_toml::Manifest::<PackageMetadata>::from_path_with_metadata(&workspace_cargo_path)
         {
             if let Some(workspace) = &workspace_manifest.workspace {
-                manifest.inherit_workspace(&workspace_manifest, &workspace_cargo_path)?;
-
                 // Look for `workspace.metadata.cargo-machete.ignored` in the workspace Cargo.toml.
                 if let Some(ignored) = workspace
                     .metadata
