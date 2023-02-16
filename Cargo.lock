@@ -87,12 +87,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2c676a478f63e9fa2dd5368a42f28bba0d6c560b775f38583c8bbaa7fcd67c9c"
 
 [[package]]
-name = "bytes"
-version = "1.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "89b2fd2a0dcf38d7971e2194b6b6eebab45ae01067456a7fd93d5547a61b70be"
-
-[[package]]
 name = "camino"
 version = "1.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -114,7 +108,7 @@ dependencies = [
  "pretty_env_logger",
  "rayon",
  "serde",
- "toml_edit 0.14.4",
+ "toml_edit",
  "walkdir",
 ]
 
@@ -156,16 +150,6 @@ name = "cfg-if"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "baf1de4339761588bc0619e3cbc0120ee582ebb74b53b4efbf79117bd2da40fd"
-
-[[package]]
-name = "combine"
-version = "4.6.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "35ed6e9d84f0b51a7f52daf1c7d71dd136fd7a3f41a8462b8cdb8c78d920fad4"
-dependencies = [
- "bytes",
- "memchr",
-]
 
 [[package]]
 name = "crossbeam-channel"
@@ -391,15 +375,6 @@ checksum = "1885e79c1fc4b10f0e172c475f458b7f7b93061064d98c3293e98c5ba0c8b399"
 dependencies = [
  "autocfg",
  "hashbrown",
-]
-
-[[package]]
-name = "itertools"
-version = "0.10.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b0fd2260e829bddf4cb6ea802289de2f86d6a7a690192fbe91b3f46e0f2c8473"
-dependencies = [
- "either",
 ]
 
 [[package]]
@@ -686,7 +661,7 @@ dependencies = [
  "serde",
  "serde_spanned",
  "toml_datetime",
- "toml_edit 0.19.3",
+ "toml_edit",
 ]
 
 [[package]]
@@ -695,18 +670,6 @@ version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3ab8ed2edee10b50132aed5f331333428b011c99402b5a534154ed15746f9622"
 dependencies = [
- "serde",
-]
-
-[[package]]
-name = "toml_edit"
-version = "0.14.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5376256e44f2443f8896ac012507c19a012df0fe8758b55246ae51a2279db51f"
-dependencies = [
- "combine",
- "indexmap",
- "itertools",
  "serde",
 ]
 
