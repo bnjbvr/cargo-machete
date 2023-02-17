@@ -276,6 +276,7 @@ fn get_full_manifest(
     let mut manifest =
         cargo_toml::Manifest::<PackageMetadata>::from_slice_with_metadata(&cargo_toml_content)?;
 
+    let mut ws_manifest_and_path = None;
     let mut workspace_ignored = vec![];
 
     let mut dir_path = dir_path.join("../");
@@ -295,13 +296,17 @@ fn get_full_manifest(
                     workspace_ignored = ignored.clone();
                 }
 
+                ws_manifest_and_path = Some((workspace_manifest, workspace_cargo_path));
                 break;
             }
         }
         dir_path = dir_path.join("../");
     }
 
-    manifest.complete_from_path(manifest_path)?;
+    manifest.complete_from_path_and_workspace(
+        manifest_path,
+        ws_manifest_and_path.as_ref().map(|(m, p)| (m, p.as_path())),
+    )?;
 
     Ok((manifest, workspace_ignored))
 }
