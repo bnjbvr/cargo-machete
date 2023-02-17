@@ -62,6 +62,10 @@ struct MacheteArgs {
     #[argh(switch)]
     fix: bool,
 
+    /// print version.
+    #[argh(switch)]
+    version: bool,
+
     /// paths to directories that must be scanned.
     #[argh(positional, greedy)]
     paths: Vec<PathBuf>,
@@ -113,6 +117,11 @@ fn run_machete() -> anyhow::Result<bool> {
     } else {
         argh::from_env()
     };
+
+    if args.version {
+        println!("{}", env!("CARGO_PKG_VERSION"));
+        std::process::exit(0);
+    }
 
     if args.paths.is_empty() {
         eprintln!("Analyzing dependencies of crates in this directory...");
