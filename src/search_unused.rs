@@ -77,12 +77,15 @@ fn make_line_regexp(name: &str) -> String {
     // Syntax documentation: https://docs.rs/regex/latest/regex/#syntax
     //
     // Breaking down this regular expression: given a line,
-    // - `use (::)?{name}(::|;| as)`: matches `use foo;`, `use foo::bar`, `use foo as bar;`, with
+    // - `use (::)?(?i){name}(?-i)(::|;| as)`: matches `use foo;`, `use foo::bar`, `use foo as bar;`, with
     // an optional "::" in front of the crate's name.
-    // - `\b({name})::`: matches `foo::X`, but not `barfoo::X`. `\b` means word boundary, so
+    // - `\b(?i){name}(?-i)::`: matches `foo::X`, but not `barfoo::X`. `\b` means word boundary, so
     // putting it before the crate's name ensures there's no polluting prefix.
-    // - `extern crate {name}( |;)`: matches `extern crate foo`, or `extern crate foo as bar`.
-    format!(r#"use (::)?{name}(::|;| as)|\b{name}::|extern crate {name}( |;)"#)
+    // - `extern crate (?i){name}(?-i)( |;)`: matches `extern crate foo`, or `extern crate foo as bar`.
+    // - `(?i){name}(?-i)` make the match against name case insensitive
+    format!(
+        r#"use (::)?(?i){name}(?-i)(::|;| as)|\b(?i){name}(?-i)::|extern crate (?i){name}(?-i)( |;)"#
+    )
 }
 
 fn make_multiline_regexp(name: &str) -> String {
@@ -91,7 +94,7 @@ fn make_multiline_regexp(name: &str) -> String {
     // Breaking down this Terrible regular expression: tries to match compound `use as` statements,
     // as in `use { X as Y };`, with possibly multiple-lines in between. Will match the first `};`
     // that it finds, which *should* be the end of the use statement, but oh well.
-    format!(r#"use \{{\s[^;]*{name}\s*as\s*[^;]*\}};"#)
+    format!(r#"use \{{\s[^;]*(?i){name}(?-i)\s*as\s*[^;]*\}};"#)
 }
 
 /// Returns all the paths to the Rust source files for a crate contained at the given path.
