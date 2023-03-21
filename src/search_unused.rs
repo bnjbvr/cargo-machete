@@ -82,7 +82,7 @@ fn make_line_regexp(name: &str) -> String {
     // - `\b(?i){name}(?-i)::`: matches `foo::X`, but not `barfoo::X`. `\b` means word boundary, so
     // putting it before the crate's name ensures there's no polluting prefix.
     // - `extern crate (?i){name}(?-i)( |;)`: matches `extern crate foo`, or `extern crate foo as bar`.
-    // - `(?i){name}(?-i)` make the match against name case insensitive
+    // - `(?i){name}(?-i)` makes the match against the crate's name case insensitive
     format!(
         r#"use (::)?(?i){name}(?-i)(::|;| as)|\b(?i){name}(?-i)::|extern crate (?i){name}(?-i)( |;)"#
     )
@@ -94,6 +94,7 @@ fn make_multiline_regexp(name: &str) -> String {
     // Breaking down this Terrible regular expression: tries to match compound `use as` statements,
     // as in `use { X as Y };`, with possibly multiple-lines in between. Will match the first `};`
     // that it finds, which *should* be the end of the use statement, but oh well.
+    // `(?i){name}(?-i)` makes the match against the crate's name case insensitive.
     format!(r#"use \{{\s[^;]*(?i){name}(?-i)\s*as\s*[^;]*\}};"#)
 }
 
@@ -494,11 +495,47 @@ fn test_regexp() -> anyhow::Result<()> {
     assert!(test_one("log", "extern crate log as logging")?);
     assert!(test_one("log", r#"log::info!("fyi")"#)?);
 
+    assert!(test_one("Log", "use log;")?);
+    assert!(test_one("Log", "use ::log;")?);
+    assert!(test_one("Log", "use log::{self};")?);
+    assert!(test_one("Log", "use log::*;")?);
+    assert!(test_one("Log", "use log::info;")?);
+    assert!(test_one("Log", "use log as logging;")?);
+    assert!(test_one("Log", "extern crate log;")?);
+    assert!(test_one("Log", "extern crate log as logging")?);
+    assert!(test_one("Log", r#"log::info!("fyi")"#)?);
+
+    assert!(test_one("log", "use Log;")?);
+    assert!(test_one("log", "use ::Log;")?);
+    assert!(test_one("log", "use Log::{self};")?);
+    assert!(test_one("log", "use Log::*;")?);
+    assert!(test_one("log", "use Log::info;")?);
+    assert!(test_one("log", "use Log as logging;")?);
+    assert!(test_one("log", "extern crate Log;")?);
+    assert!(test_one("log", "extern crate Log as logging")?);
+    assert!(test_one("log", r#"Log::info!("fyi")"#)?);
+
     assert!(test_one(
         "bitflags",
         r#"
 use std::fmt;
 bitflags::macro! {
+"#
+    )?);
+
+    assert!(test_one(
+        "Bitflags",
+        r#"
+use std::fmt;
+bitflags::macro! {
+"#
+    )?);
+
+    assert!(test_one(
+        "bitflags",
+        r#"
+use std::fmt;
+Bitflags::macro! {
 "#
     )?);
 
