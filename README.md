@@ -26,7 +26,7 @@ Install `cargo-machete` with cargo:
 
 `cargo install cargo-machete`
 
-## Example
+## Usage
 
 Run cargo-machete in a directory that contains one or more Rust projects (using Cargo for
 dependency management):
@@ -38,6 +38,17 @@ cd my-directory && cargo machete
 
 cargo machete /absolute/path/to/my/directory
 ```
+
+The **return code** gives an indication whether unused dependencies have been found:
+
+- 0 if machete found no unused dependencies,
+- 1 if it found at least one unused dependency,
+- 2 if there was an error during processing (in which case there's no indication whether any unused
+  dependency was found or not).
+
+This can be used in CI situations.
+
+### False positives
 
 To ignore a certain set of dependencies in a crate, add
 `package.metadata.cargo-machete` to `Cargo.toml`, and specify an `ignored` array:
