@@ -48,7 +48,7 @@ The **return code** gives an indication whether unused dependencies have been fo
 
 This can be used in CI situations.
 
-### False positives
+### False positives
 
 To ignore a certain set of dependencies in a crate, add
 `package.metadata.cargo-machete` to `Cargo.toml`, and specify an `ignored` array:
