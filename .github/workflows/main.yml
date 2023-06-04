@@ -28,7 +28,7 @@ jobs:
           toolchain: ${{ matrix.rust }}
           components: clippy, rustfmt
 
-      - uses: Swatinem/rust-cache@v1
+      - uses: Swatinem/rust-cache@v2
 
       - run: cargo fmt --all --check
 
