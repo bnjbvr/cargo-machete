@@ -23,10 +23,9 @@ jobs:
     steps:
       - uses: actions/checkout@v2
 
-      - uses: actions-rs/toolchain@v1
+      - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ matrix.rust }}
-          override: true
           components: clippy, rustfmt
 
       - uses: Swatinem/rust-cache@v1
@@ -75,10 +74,9 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - name: Install stable toolchain
-        uses: actions-rs/toolchain@v1
+        uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ matrix.rust }}
-          override: true
           target: ${{ matrix.target }}
       - name: Install musl tools
         if: matrix.os == 'ubuntu-20.04'
