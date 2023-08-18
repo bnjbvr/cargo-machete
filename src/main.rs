@@ -211,6 +211,17 @@ fn run_machete() -> anyhow::Result<bool> {
         }
     }
 
+    if has_unused_dependencies {
+        println!("\n\
+            If you believe cargo-machete has detected an unused dependency incorrectly, you may add it\n\
+            to the list of dependencies to ignore in the `[package.metadata.cargo-machete]` section of\n\
+            the appropriate Cargo.toml file. For example:\n\
+            \n\
+            [package.metadata.cargo-machete]\n\
+            ignored = [\"prost\"]\n"
+        );
+    }
+
     eprintln!("Done!");
 
     if !walkdir_errors.is_empty() {
