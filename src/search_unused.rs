@@ -729,7 +729,7 @@ fn test_crate_renaming_works() -> anyhow::Result<()> {
 
 #[test]
 fn test_ignore_deps_works() {
-    // ensure that ignored deps listed in Cargo.toml package.metadata.cargo-machete.ignore are
+    // ensure that ignored deps listed in Cargo.toml package.metadata.cargo-machete.ignored are
     // correctly ignored.
     check_analysis("./integration-tests/ignored-dep/Cargo.toml", |analysis| {
         assert_eq!(analysis.unused, &["rand".to_string()]);
@@ -739,7 +739,7 @@ fn test_ignore_deps_works() {
 
 #[test]
 fn test_ignore_deps_workspace_works() {
-    // ensure that ignored deps listed in Cargo.toml workspace.metadata.cargo-machete.ignore are
+    // ensure that ignored deps listed in Cargo.toml workspace.metadata.cargo-machete.ignored are
     // correctly ignored.
     check_analysis(
         "./integration-tests/ignored-dep-workspace/inner/Cargo.toml",
