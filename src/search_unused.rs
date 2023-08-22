@@ -283,8 +283,8 @@ fn get_full_manifest(
     let mut ws_manifest_and_path = None;
     let mut workspace_ignored = vec![];
 
-    let mut dir_path = dir_path.join("../");
-    while dir_path.exists() {
+    let mut dir_path = dir_path.to_path_buf();
+    while dir_path.pop() {
         let workspace_cargo_path = dir_path.join("Cargo.toml");
         if let Ok(workspace_manifest) =
             cargo_toml::Manifest::<PackageMetadata>::from_path_with_metadata(&workspace_cargo_path)
@@ -304,7 +304,6 @@ fn get_full_manifest(
                 break;
             }
         }
-        dir_path = dir_path.join("../");
     }
 
     manifest.complete_from_path_and_workspace(
