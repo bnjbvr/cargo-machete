@@ -68,6 +68,35 @@ flag, which will call `cargo metadata --all-features` to find final dependency
 names, more accurate dependencies per build type, etc. ⚠ This may modify the
 `Cargo.lock` files in your projects.
 
+## Cargo Machete Action
+
+A github action for cargo machete.
+
+### Example usage
+
+The step given by,
+```
+      - uses: bnjbvr/cargo-machete@v1
+```
+can be added to any workflow.
+
+An example workflow is shown below:
+
+```yaml
+name: Cargo Machete
+on:
+  pull_request: { branches: "*" }
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+      - name: Machete
+        uses: bnjbvr/cargo-machete@v1
+```
+
 ## Contributing
 
 [![Contributor Covenant](https://img.shields.io/badge/contributor%20covenant-v1.4-ff69b4.svg)](https://www.contributor-covenant.org/version/1/4/code-of-conduct/)
