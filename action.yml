@@ -1,0 +1,18 @@
+name: 'cargo-machete'
+description: 'A github action for cargo machete'
+author: 'Cargo machete community'
+branding:
+  color: "black"
+  icon: "code"
+runs:
+  using: composite
+  steps:
+    - name: Install cargo-machete
+      uses: actions-rs/cargo@v1
+      with:
+        command: install
+        args: cargo-machete
+    - name: Machete
+      uses: actions-rs/cargo@v1
+      with:
+        command: machete
