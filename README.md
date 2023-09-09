@@ -76,7 +76,7 @@ A github action for cargo machete.
 
 The step given by,
 ```
-      - uses: bnjbvr/cargo-machete@v1
+      - uses: bnjbvr/cargo-machete@main
 ```
 can be added to any workflow.
 
@@ -94,7 +94,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v3
       - name: Machete
-        uses: bnjbvr/cargo-machete@v1
+        uses: bnjbvr/cargo-machete@main
 ```
 
 ## Contributing
