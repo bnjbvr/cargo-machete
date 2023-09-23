@@ -1,3 +1,12 @@
+# 0.6.0 (released on 2023-09-23)
+
+- *Breaking*/improved: match against crate name case-insensitive (#69).
+- Added: Github action (#85). See README for documentation.
+- Added: support for ignored workspace dependencies (#57, #86). See README for documentation.
+- Added: `--version` switch to print the version (#66).
+- Fix: avoid searching for workspace Cargo.toml longer than needed (#84).
+- Chore: better documentation and reporting (#63, #72, #80).
+
 # 0.5.0 (released on 2022-11-15)
 
 - *Breaking*: Use `argh` for parsing. Now, paths of directories to scan must be passed in the last
