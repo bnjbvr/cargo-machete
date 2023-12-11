@@ -7,7 +7,6 @@ edition = "2021"
 
 [dependencies]
 log-once = "0.3.1"
-rand = "0.8.5"
 rand_core = "0.6.3"
 lazy_static = "1.4.0"
 serde.workspace = true

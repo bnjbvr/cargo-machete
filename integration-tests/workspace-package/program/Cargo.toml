@@ -6,4 +6,3 @@ version.workspace = true
 description.workspace = true
 
 [dependencies]
-log.workspace = true

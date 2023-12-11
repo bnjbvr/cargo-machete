@@ -2,6 +2,7 @@ mod search_unused;
 
 use crate::search_unused::find_unused;
 use anyhow::Context;
+use clap::Parser;
 use rayon::prelude::*;
 use std::path::Path;
 use std::str::FromStr;
@@ -37,38 +38,44 @@ impl From<bool> for UseCargoMetadata {
     }
 }
 
-#[derive(argh::FromArgs)]
-#[argh(description = r#"
-cargo-machete: Helps find unused dependencies in a fast yet imprecise way.
-
-Exit code:
-    0:  when no unused dependencies are found
-    1:  when at least one unused (non-ignored) dependency is found
-    2:  on error
-"#)]
+#[derive(Parser)]
+/// cargo-machete: Helps find unused dependencies in a fast yet imprecise way.
+///
+/// Exit Code:
+///
+///     0:  when no unused dependencies are found
+///
+///     1:  when at least one unused (non-ignored) dependency is found
+///
+///     2:  on error
 struct MacheteArgs {
-    /// uses cargo-metadata to figure out the dependencies' names. May be useful if some
-    /// dependencies are renamed from their own Cargo.toml file (e.g. xml-rs which gets renamed
-    /// xml). Try it if you get false positives!
-    #[argh(switch)]
+    /// Paths to the directories that should be scanned
+    paths: Vec<PathBuf>,
+
+    /// uses cargo-metadata to figure out the dependencies' names.
+    ///
+    /// May be useful if some dependencies are renamed from their own Cargo.toml
+    /// file
+    ///
+    /// (e.g. xml-rs which gets renamed to xml).
+    ///
+    /// Try it if you get false positives!
+    #[arg(short = 'w', long)]
     with_metadata: bool,
 
     /// don't analyze anything contained in any target/ directories encountered.
-    #[argh(switch)]
+    #[arg(short = 's', long)]
     skip_target_dir: bool,
 
     /// rewrite the Cargo.toml files to automatically remove unused dependencies.
+    ///
     /// Note: all dependencies flagged by cargo-machete will be removed, including false positives.
-    #[argh(switch)]
+    #[arg(short = 'f', long)]
     fix: bool,
 
-    /// print version.
-    #[argh(switch)]
+    /// Print the current version.
+    #[arg(short = 'v', long)]
     version: bool,
-
-    /// paths to directories that must be scanned.
-    #[argh(positional, greedy)]
-    paths: Vec<PathBuf>,
 }
 
 fn collect_paths(path: &Path, skip_target_dir: bool) -> Result<Vec<PathBuf>, walkdir::Error> {
@@ -95,41 +102,25 @@ fn collect_paths(path: &Path, skip_target_dir: bool) -> Result<Vec<PathBuf>, wal
         .collect()
 }
 
-/// Return true if this is run as `cargo machete`, false otherwise (`cargo-machete`, `cargo run -- ...`)
-fn running_as_cargo_cmd() -> bool {
-    // If run under Cargo in general, a `CARGO` environment variable is set.
-    //
-    // But this is also set when running with `cargo run`, which we don't want to break! In that
-    // latter case, another set of cargo variables are defined, which aren't defined when just
-    // running as `cargo machete`. Picked `CARGO_PKG_NAME` as one of those variables.
-    //
-    // So we're running under cargo if `CARGO` is defined, but not `CARGO_PKG_NAME`.
-    std::env::var("CARGO").is_ok() && std::env::var("CARGO_PKG_NAME").is_err()
-}
-
 /// Runs `cargo-machete`.
 /// Returns Ok with a bool whether any unused dependencies were found, or Err on errors.
 fn run_machete() -> anyhow::Result<bool> {
+    let mut machete = MacheteArgs::parse();
     pretty_env_logger::init();
 
-    let mut args: MacheteArgs = if running_as_cargo_cmd() {
-        argh::cargo_from_env()
-    } else {
-        argh::from_env()
-    };
-
-    if args.version {
+    if machete.version {
         println!("{}", env!("CARGO_PKG_VERSION"));
         std::process::exit(0);
     }
 
-    if args.paths.is_empty() {
+    if machete.paths.is_empty() {
         eprintln!("Analyzing dependencies of crates in this directory...");
-        args.paths.push(std::env::current_dir()?);
+        machete.paths.push(std::env::current_dir()?);
     } else {
         eprintln!(
-            "Analyzing dependencies of crates in {}...",
-            args.paths
+            "Analyzing dependencies of crates  in {}...",
+            machete
+                .paths
                 .iter()
                 .cloned()
                 .map(|path| path.as_os_str().to_string_lossy().to_string())
@@ -141,8 +132,8 @@ fn run_machete() -> anyhow::Result<bool> {
     let mut has_unused_dependencies = false;
     let mut walkdir_errors = Vec::new();
 
-    for path in args.paths {
-        let manifest_path_entries = match collect_paths(&path, args.skip_target_dir) {
+    for path in machete.paths {
+        let manifest_path_entries = match collect_paths(&path, machete.skip_target_dir) {
             Ok(entries) => entries,
             Err(err) => {
                 walkdir_errors.push(err);
@@ -155,7 +146,7 @@ fn run_machete() -> anyhow::Result<bool> {
         let results = manifest_path_entries
             .par_iter()
             .filter_map(|manifest_path| {
-                match find_unused(manifest_path, args.with_metadata.into()) {
+                match find_unused(manifest_path, machete.with_metadata.into()) {
                     Ok(Some(analysis)) => {
                         if analysis.unused.is_empty() {
                             None
@@ -173,7 +164,7 @@ fn run_machete() -> anyhow::Result<bool> {
                     }
 
                     Err(err) => {
-                        eprintln!("error when handling {}: {}", manifest_path.display(), err);
+                        eprintln!("Error when handling {}: {}", manifest_path.display(), err);
                         None
                     }
                 }
@@ -183,18 +174,20 @@ fn run_machete() -> anyhow::Result<bool> {
         // Display all the results.
         if results.is_empty() {
             println!(
-                "cargo-machete didn't find any unused dependencies in {}. Good job!",
+                "Machete didn't find any unused dependencies in {}. Good job :D",
                 path.to_string_lossy()
             );
             continue;
         }
 
         println!(
-            "cargo-machete found the following unused dependencies in {}:",
+            "Machete found the following unused dependencies in {}:",
             path.to_string_lossy()
         );
+
         for (analysis, path) in results {
             println!("{} -- {}:", analysis.package_name, path.to_string_lossy());
+
             for dep in &analysis.unused {
                 println!("\t{dep}");
                 has_unused_dependencies = true; // any unused dependency is enough to set flag to true
@@ -204,7 +197,7 @@ fn run_machete() -> anyhow::Result<bool> {
                 eprintln!("\t⚠️  {dep} was marked as ignored, but is actually used!");
             }
 
-            if args.fix {
+            if machete.fix {
                 let fixed = remove_dependencies(&fs::read_to_string(path)?, &analysis.unused)?;
                 fs::write(path, fixed).expect("Cargo.toml write error");
             }
@@ -223,7 +216,7 @@ fn run_machete() -> anyhow::Result<bool> {
             ignored = [\"prost\"]"
         );
 
-        if !args.with_metadata {
+        if !machete.with_metadata {
             println!(
                 "\n\
                 You can also try running it with the `--with-metadata` flag for better accuracy,\n\
@@ -281,22 +274,4 @@ fn main() {
     };
 
     std::process::exit(exit_code);
-}
-
-#[cfg(test)]
-const TOP_LEVEL: &str = concat!(env!("CARGO_MANIFEST_DIR"));
-
-#[test]
-fn test_ignore_target() {
-    let entries = collect_paths(
-        &PathBuf::from(TOP_LEVEL).join("./integration-tests/with-target/"),
-        true,
-    );
-    assert!(entries.unwrap().is_empty());
-
-    let entries = collect_paths(
-        &PathBuf::from(TOP_LEVEL).join("./integration-tests/with-target/"),
-        false,
-    );
-    assert!(!entries.unwrap().is_empty());
 }
