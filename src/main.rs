@@ -174,7 +174,7 @@ fn run_machete() -> anyhow::Result<bool> {
         // Display all the results.
         if results.is_empty() {
             println!(
-                "Machete didn't find any unused dependencies in {}. Good job :D",
+                "Machete didn't find any unused dependencies in {}.\nGood job :D",
                 path.to_string_lossy()
             );
             continue;

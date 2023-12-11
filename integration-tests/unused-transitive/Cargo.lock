@@ -17,6 +17,5 @@ dependencies = [
 name = "udeps-test-case"
 version = "0.1.0"
 dependencies = [
- "lib1",
  "lib2",
 ]

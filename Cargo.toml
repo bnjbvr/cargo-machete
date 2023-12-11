@@ -14,7 +14,7 @@ readme = "README.md"
 anyhow = "1.0.57"
 cargo_metadata = "0.18.0"
 cargo_toml = "0.16.2"
-clap = { version = "4.4.11", features = ["derive", "cargo"] }
+clap = { version = "4.4.11", features = ["derive"] }
 grep = "0.2.8"
 log = "0.4.16"
 pretty_env_logger = "0.5.0"
