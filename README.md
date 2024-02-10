@@ -12,6 +12,10 @@
   </p>
 </div>
 
+![](https://github.com/bnjbvr/cargo-machete/raw/main/logo.svg)
+
+*Thanks to [Diego F. Goberna](https://github.com/feiss) for the lovely logo 🥰*
+
 ## Introduction
 
 `cargo-machete` is a Cargo tool that detects unused dependencies in Rust
