@@ -18,7 +18,7 @@ jobs:
       matrix:
         rust:
           - stable
-          #- nightly # re-enable once #104 has been fixed
+          - nightly
 
     steps:
       - uses: actions/checkout@v3
