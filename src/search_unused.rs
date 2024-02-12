@@ -352,12 +352,51 @@ pub(crate) fn find_unused(
             .nodes
             .iter()
             .find(|node| {
-                // e.g. "aa 0.1.0 (path+file:///tmp/aa)"
-                node.id
-                    .repr
-                    .split(' ')
-                    .next() // e.g. "aa"
-                    .map_or(false, |node_package_name| node_package_name == package_name)
+                // Note: this is dependent on rustc, so it's a bit fragile, and may break with
+                // nightly versions of the compiler (see cargo-machete issue #104).
+
+                // The node id can have multiple representations:
+                // - on rust 1.77 and before, something like "aa 0.1.0 (path+file:///tmp/aa)".
+                // - on rust 1.78+, something like:
+                //  - "path+file:///home/ben/cargo-machete/integration-tests/aa#0.1.0"
+                //  - "path+file:///home/ben/cargo-machete/integration-tests/directory#aa@0.1.0"
+                let repr = &node.id.repr;
+
+                let package_found = if repr.contains(' ') {
+                    // Rust < 1.78, take everything up to the space.
+                    node.id.repr.split(' ').next() // e.g. "aa"
+                } else {
+                    // Rust >= 1.78. Oh boy.
+                    let mut temp = None;
+
+                    let mut slash_split = node.id.repr.split('/').peekable();
+
+                    while let Some(subset) = slash_split.next() {
+                        // Continue until the last part of the path.
+                        if slash_split.peek().is_some() {
+                            continue;
+                        }
+
+                        // If there's no next slash separator, we've reached the end, and subset is
+                        // one of:
+                        // - aa#0.1.0
+                        // - directory#aa@0.1.0
+                        if subset.contains('@') {
+                            let mut hash_split = subset.split('#');
+                            // Skip everything before the hash.
+                            hash_split.next();
+                            // Now in the rest, take everything up to the @.
+                            temp = hash_split.next().and_then(|end| end.split('@').next());
+                        } else {
+                            // Otherwise, take everything up to the #.
+                            temp = subset.split('#').next();
+                        }
+                    }
+
+                    temp
+                };
+
+                package_found.map_or(false, |node_package_name| node_package_name == package_name)
             })
             .expect("the current package must be in the dependency graph")
             .deps
