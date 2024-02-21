@@ -1,3 +1,7 @@
+# 0.6.1 (released on 2024-02-21)
+
+- Chore: bump major dependencies, to fix parsing issues of Cargo.toml files (#101, #105).
+
 # 0.6.0 (released on 2023-09-23)
 
 - *Breaking*/improved: match against crate name case-insensitive (#69).
