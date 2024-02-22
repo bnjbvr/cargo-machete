@@ -125,7 +125,7 @@ fn run_machete() -> anyhow::Result<bool> {
 
     if args.paths.is_empty() {
         eprintln!("Analyzing dependencies of crates in this directory...");
-        args.paths.push(std::env::current_dir()?);
+        args.paths.push(PathBuf::from("."));
     } else {
         eprintln!(
             "Analyzing dependencies of crates in {}...",
