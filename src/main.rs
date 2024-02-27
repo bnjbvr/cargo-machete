@@ -1,11 +1,13 @@
 mod search_unused;
 
 use crate::search_unused::find_unused;
-use anyhow::Context;
+use anyhow::{anyhow, bail, Context};
 use rayon::prelude::*;
+use std::collections::HashSet;
 use std::path::Path;
 use std::str::FromStr;
 use std::{fs, path::PathBuf};
+use toml_edit::{KeyMut, Table, TableLike};
 use walkdir::WalkDir;
 
 #[derive(Clone, Copy)]
@@ -250,20 +252,60 @@ fn run_machete() -> anyhow::Result<bool> {
     Ok(has_unused_dependencies)
 }
 
-fn remove_dependencies(manifest: &str, dependencies_list: &[String]) -> anyhow::Result<String> {
-    let mut manifest = toml_edit::Document::from_str(manifest)?;
-    let dependencies = manifest
-        .iter_mut()
-        .find_map(|(k, v)| (v.is_table_like() && k == "dependencies").then_some(Some(v)))
-        .flatten()
-        .context("dependencies table is missing or empty")?
-        .as_table_mut()
-        .context("unexpected missing table, please report with a test case on https://github.com/bnjbvr/cargo-machete")?;
+// hande a superset of all dependency name dashed/underscored variants: re'\w[-_]'
+fn dep_name_superset(dep_names: &[String]) -> HashSet<String> {
+    let mut unused: HashSet<String> = dep_names.iter().cloned().collect();
+    for dep in unused.clone() {
+        unused.insert(dep.replace("-", "_"));
+        unused.insert(dep.replace("_", "-"));
+    }
+    unused
+}
 
-    for k in dependencies_list {
-        dependencies
-            .remove(k)
-            .with_context(|| format!("Dependency {k} not found"))?;
+fn remove_dependencies(manifest: &str, dependency_list: &[String]) -> anyhow::Result<String> {
+    let mut manifest = toml_edit::Document::from_str(manifest)?;
+    let missing_table_msg = "unexpected missing table, please report with a test case on https://github.com/bnjbvr/cargo-machete";
+    let valid_tables = HashSet::from(["dependencies", "build-dependencies", "dev-dependencies"]);
+    let dependency_superset = dep_name_superset(dependency_list);
+
+    let mut dep_tables = manifest
+        .iter_mut()
+        // select for items that are tables with valid names
+        .filter(|(k, v)| v.is_table_like() && valid_tables.contains(k.display_repr().as_ref()))
+        .map(|(k, v)| {
+            let table = v.as_table_like_mut().context(missing_table_msg)?;
+            Ok((k, table))
+        })
+        .filter(|v| match v {
+            Ok((_, table)) if dependency_superset.iter().any(|k| table.contains_key(k)) => true,
+            Err(_) => true,
+            Ok(_) => false,
+        })
+        .collect::<Result<Vec<(KeyMut, &mut dyn TableLike)>, anyhow::Error>>()?;
+
+    for dep in dependency_list {
+        // for now
+        let mut removed_one = false;
+        for (name, table) in &mut dep_tables {
+            if table
+                .remove(&dep)
+                .or_else(|| table.remove(dep.replace("_", "-").as_str()))
+                .is_some()
+            {
+                removed_one = true;
+                log::debug!("removed {name}.{dep}");
+            } else {
+                log::trace!("no match for {name}.{dep}");
+            }
+        }
+        if !removed_one {
+            let tables = dep_tables
+                .iter()
+                .map(|(k, _)| format!("{k}"))
+                .collect::<Vec<String>>()
+                .join(", ");
+            bail!(anyhow!("{dep} not found").context(format!("tables: {tables}")));
+        }
     }
 
     let serialized = manifest.to_string();
@@ -275,7 +317,7 @@ fn main() {
         Ok(false) => 0,
         Ok(true) => 1,
         Err(err) => {
-            eprintln!("Error: {err}");
+            eprintln!("Error: {err:?}");
             2
         }
     };
