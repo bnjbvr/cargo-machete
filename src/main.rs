@@ -18,13 +18,13 @@ pub(crate) enum UseCargoMetadata {
 
 #[cfg(test)]
 impl UseCargoMetadata {
-    fn all() -> &'static [UseCargoMetadata] {
-        &[UseCargoMetadata::Yes, UseCargoMetadata::No]
+    fn all() -> &'static [Self] {
+        &[Self::Yes, Self::No]
     }
 }
 
 impl From<UseCargoMetadata> for bool {
-    fn from(v: UseCargoMetadata) -> bool {
+    fn from(v: UseCargoMetadata) -> Self {
         matches!(v, UseCargoMetadata::Yes)
     }
 }
@@ -93,7 +93,7 @@ fn collect_paths(path: &Path, skip_target_dir: bool) -> Result<Vec<PathBuf>, wal
             Ok(entry) => entry.file_name() == "Cargo.toml",
             Err(_) => true,
         })
-        .map(|res_entry| res_entry.map(|e| e.into_path()))
+        .map(|res_entry| res_entry.map(walkdir::DirEntry::into_path))
         .collect()
 }
 
@@ -233,7 +233,7 @@ fn run_machete() -> anyhow::Result<bool> {
             );
         }
 
-        println!()
+        println!();
     }
 
     eprintln!("Done!");
