@@ -7,7 +7,7 @@ use std::collections::HashSet;
 use std::path::Path;
 use std::str::FromStr;
 use std::{fs, path::PathBuf};
-use toml_edit::{KeyMut, Table, TableLike};
+use toml_edit::{KeyMut, TableLike};
 use walkdir::WalkDir;
 
 #[derive(Clone, Copy)]
@@ -256,8 +256,8 @@ fn run_machete() -> anyhow::Result<bool> {
 fn dep_name_superset(dep_names: &[String]) -> HashSet<String> {
     let mut unused: HashSet<String> = dep_names.iter().cloned().collect();
     for dep in unused.clone() {
-        unused.insert(dep.replace("-", "_"));
-        unused.insert(dep.replace("_", "-"));
+        unused.insert(dep.replace('-', "_"));
+        unused.insert(dep.replace('_', "-"));
     }
     unused
 }
@@ -288,8 +288,8 @@ fn remove_dependencies(manifest: &str, dependency_list: &[String]) -> anyhow::Re
         let mut removed_one = false;
         for (name, table) in &mut dep_tables {
             if table
-                .remove(&dep)
-                .or_else(|| table.remove(dep.replace("_", "-").as_str()))
+                .remove(dep)
+                .or_else(|| table.remove(dep.replace('_', "-").as_str()))
                 .is_some()
             {
                 removed_one = true;
