@@ -252,7 +252,7 @@ fn run_machete() -> anyhow::Result<bool> {
     Ok(has_unused_dependencies)
 }
 
-// hande a superset of all dependency name dashed/underscored variants: re'\w[-_]'
+// handle a superset of all dependency name dashed/underscored variants: re'\w[-_]'
 fn dep_name_superset(dep_names: &[String]) -> HashSet<String> {
     let mut unused: HashSet<String> = dep_names.iter().cloned().collect();
     for dep in unused.clone() {

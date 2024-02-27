@@ -180,7 +180,7 @@ fn collect_paths(dir_path: &Path, analysis: &PackageAnalysis) -> Vec<PathBuf> {
 /// Performs search of the given crate name with the following strategy: first try to use the line
 /// matcher, then the multiline matcher if the line matcher failed.
 ///
-/// Splitting the single line matcher from the multiline matcher makes maintainance of the regular
+/// Splitting the single line matcher from the multiline matcher makes maintenance of the regular
 /// expressions simpler (oh well), and likely faster too since most use statements will be caught
 /// by the single line matcher.
 struct Search {
