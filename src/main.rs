@@ -266,6 +266,26 @@ fn remove_dependencies(manifest: &str, dependencies_list: &[String]) -> anyhow::
             .with_context(|| format!("Dependency {k} not found"))?;
     }
 
+    let features = manifest
+        .iter_mut()
+        .find_map(|(k, v)| (v.is_table_like() && k == "features").then_some(Some(v)))
+        .flatten()
+        .and_then(|v| v.as_table_mut());
+
+    if let Some(features) = features {
+        for (_, deps) in features.iter_mut() {
+            if let Some(deps) = deps.as_array_mut() {
+                deps.retain(|dep| {
+                    if let Some(dep) = dep.as_str() {
+                        !dependencies_list.iter().any(|d| dep.contains(d))
+                    } else {
+                        true
+                    }
+                });
+            }
+        }
+    }
+
     let serialized = manifest.to_string();
     Ok(serialized)
 }
