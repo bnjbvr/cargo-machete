@@ -51,6 +51,7 @@ jobs:
       # Then compare actual with expected, if no difference, test passes
       - run: cargo build --release
       - run: cargo install --path .
+      - run: ls
       - run: cd integration-tests/autofix-with-feature/actual
       - run: pwd
       - run: cargo machete --fix || true
