@@ -53,7 +53,9 @@ jobs:
       - run: cargo install --path .
       - run: cd integration-tests/autofix-with-feature/actual
       - run: cargo machete --fix || true
-      - run: cd .. & diff -r expected actual
+      - run: pwd
+      - run: cd ..
+      - run: diff -r expected actual
 
   # Code mutably borrowed from https://github.com/EmbarkStudios/cargo-deny/, thanks Embark!
   release:
