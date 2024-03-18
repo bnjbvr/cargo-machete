@@ -7,12 +7,12 @@ on:
     tags:
       - "*"
   pull_request:
-    branches: [ main ]
+    branches: [main]
 
 jobs:
   ci:
     env:
-        RUST_BACKTRACE: 1
+      RUST_BACKTRACE: 1
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -35,6 +35,23 @@ jobs:
       - run: cargo clippy --all --all-features -- -D warnings
 
       - run: cargo test --workspace --verbose
+
+  autofix:
+    name: Autofix Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+          components: clippy, rustfmt
+      # Build the binary, install it as cargo machete using cargo install --path . and then run it on integration-tests/autofix-with-feature/actual
+      # Then compare actual with expected, if no difference, test passes
+      - run: cargo build --release
+      - run: cargo install --path .
+      - run: cd integration-tests/autofix-with-feature/actual
+      - run: cargo machete --fix
+      - run: cd .. & diff -r expected actual
 
   # Code mutably borrowed from https://github.com/EmbarkStudios/cargo-deny/, thanks Embark!
   release:
