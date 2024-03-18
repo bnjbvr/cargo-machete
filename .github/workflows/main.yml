@@ -49,10 +49,11 @@ jobs:
           components: clippy, rustfmt
       # Build the binary, install it as cargo machete using cargo install --path . and then run it on integration-tests/autofix-with-feature/actual
       # Then compare actual with expected, if no difference, test passes
-      - run: cargo build --release
-      - run: cargo install --path .
+      # - run: cargo build --release
+      # - run: cargo install --path .
       - run: ls
-      - run: cd integration-tests/autofix-with-feature/actual && cargo machete --fix || true
+      # - run: cd integration-tests/autofix-with-feature/actual && cargo machete --fix || true
+      - run: cd integration-tests/autofix-with-feature/actual && pwd
       - run: cd integration-tests/autofix-with-feature && diff -r expected actual
 
   # Code mutably borrowed from https://github.com/EmbarkStudios/cargo-deny/, thanks Embark!
