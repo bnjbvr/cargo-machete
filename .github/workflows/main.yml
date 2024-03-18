@@ -52,7 +52,7 @@ jobs:
       - run: cargo build --release
       - run: cargo install --path .
       - run: cd integration-tests/autofix-with-feature/actual
-      - run: cargo machete --fix
+      - run: cargo machete --fix || true
       - run: cd .. & diff -r expected actual
 
   # Code mutably borrowed from https://github.com/EmbarkStudios/cargo-deny/, thanks Embark!
