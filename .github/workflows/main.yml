@@ -39,6 +39,8 @@ jobs:
   autofix:
     name: Autofix Tests
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
     steps:
       - uses: actions/checkout@v3
       - uses: dtolnay/rust-toolchain@master
