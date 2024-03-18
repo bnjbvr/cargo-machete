@@ -50,8 +50,21 @@ jobs:
       - run: cargo build --release
       - run: cargo install --path .
       - run: ls
-      - run: cd integration-tests/autofix-with-feature/actual && cargo machete --fix || true
-      - run: cd integration-tests/autofix-with-feature && diff -r expected actual
+      # The below works, but we need it to instead run with a different structure
+      # There is now a cli-tests directory, with actual and expected subdirectories
+      # In each of those is a number of tests we dont know hte names of in advance
+      # We want to dynamically run the below for each of those, and well as any added in actual
+      # And then diff the whole directory
+      # - run: cd integration-tests/autofix-with-feature/actual && cargo machete --fix || true
+      # - run: cd integration-tests/autofix-with-feature && diff -r expected actual
+      # Get all directoriies in cli-tests/actual, and for each run cargo-machete --fix,
+      - run: |
+        for dir in cli-tests/actual/*; do
+          if [ -d "$dir" ]; then
+            cd "$dir" && cargo machete --fix || true
+          fi
+        done
+      - run: cd cli-tests && diff -r expected actual
 
   # Code mutably borrowed from https://github.com/EmbarkStudios/cargo-deny/, thanks Embark!
   release:
