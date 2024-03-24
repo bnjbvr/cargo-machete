@@ -251,7 +251,7 @@ fn run_machete() -> anyhow::Result<bool> {
 }
 
 fn remove_dependencies(manifest: &str, dependencies_list: &[String]) -> anyhow::Result<String> {
-    let mut manifest = toml_edit::Document::from_str(manifest)?;
+    let mut manifest = toml_edit::DocumentMut::from_str(manifest)?;
     let dependencies = manifest
         .iter_mut()
         .find_map(|(k, v)| (v.is_table_like() && k == "dependencies").then_some(Some(v)))
