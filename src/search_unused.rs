@@ -360,6 +360,10 @@ pub(crate) fn find_unused(
                 // - on rust 1.78+, something like:
                 //  - "path+file:///home/ben/cargo-machete/integration-tests/aa#0.1.0"
                 //  - "path+file:///home/ben/cargo-machete/integration-tests/directory#aa@0.1.0"
+                //
+                //  See https://doc.rust-lang.org/cargo/reference/pkgid-spec.html for the full
+                //  spec. If this breaks in the future (>= March 2024), consider using
+                //  `cargo-util-schemas`.
                 let repr = &node.id.repr;
 
                 let package_found = if repr.contains(' ') {
