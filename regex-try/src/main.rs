@@ -5,7 +5,7 @@ use grep::{
 };
 
 fn main() {
-    dioxus::desktop::launch(app);
+    dioxus_desktop::launch(app);
 }
 
 fn search(pattern: &str, content: &str) -> anyhow::Result<bool> {
