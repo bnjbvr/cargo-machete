@@ -297,7 +297,7 @@ fn get_full_manifest(
                     .and_then(|metadata| metadata.cargo_machete.as_ref())
                     .map(|machete| &machete.ignored)
                 {
-                    workspace_ignored = ignored.clone();
+                    workspace_ignored.clone_from(ignored);
                 }
 
                 ws_manifest_and_path = Some((workspace_manifest, workspace_cargo_path));
