@@ -277,7 +277,10 @@ fn remove_dependencies(manifest: &str, dependencies_list: &[String]) -> anyhow::
             if let Some(deps) = deps.as_array_mut() {
                 deps.retain(|dep| {
                     if let Some(dep) = dep.as_str() {
-                        !dependencies_list.iter().any(|d| dep.contains(d))
+                        !dependencies_list.iter().any(|d| {
+                            let prefix = d.to_string() + "/";
+                            dep.contains(&prefix)
+                        })
                     } else {
                         true
                     }
