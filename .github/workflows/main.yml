@@ -7,12 +7,13 @@ on:
     tags:
       - "*"
   pull_request:
-    branches: [ main ]
+    branches: [main]
 
 jobs:
   ci:
+    name: CI
     env:
-        RUST_BACKTRACE: 1
+      RUST_BACKTRACE: 1
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -35,6 +36,27 @@ jobs:
       - run: cargo clippy --all --all-features -- -D warnings
 
       - run: cargo test --workspace --verbose
+
+  autofix:
+    name: Autofix Tests
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+    steps:
+      - uses: actions/checkout@v3
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+          components: clippy, rustfmt
+      - run: cargo build --release
+      - run: cargo install --path .
+      - run: |
+          for dir in cli-tests/actual/*; do
+            if [ -d "$dir" ]; then
+              cd "$dir" && cargo machete --fix || true
+            fi
+          done
+      - run: cd cli-tests && diff -r expected actual
 
   # Code mutably borrowed from https://github.com/EmbarkStudios/cargo-deny/, thanks Embark!
   release:
