@@ -1,3 +1,12 @@
+# unreleased
+
+- Added: `--ignore` flag which make cargo-machete respect .ignore and .gitignore files when searching for files (#95).
+
+# 0.6.2 (released on 2024-03-24)
+
+- Added: shorter display when scanning the current directory (#109).
+- Fix: adapt to latest pkgid specification, so as not to crash with `--with-metadata` (#106).
+
 # 0.6.1 (released on 2024-02-21)
 
 - Chore: bump major dependencies, to fix parsing issues of Cargo.toml files (#101, #105).
