@@ -110,7 +110,7 @@ fn make_multiline_regexp(name: &str) -> String {
     let sub_modules_match = r#"(?:::\w+)*(?:\s+as\s+\w+|::\{[^{}]*(?:\{[^{}]*(?:\{[^{}]*(?:\{[^{}]*\})?[^{}]*\})?[^{}]*\})?[^{}]*\})?"#;
 
     format!(
-        r#"use \{{\s*(?:\w+{sub_modules_match}\s*,\s*)*{name}{sub_modules_match}\s*(?:\s*,\s*\w+{sub_modules_match})*\s*,?\s*\}};"#
+        r#"use \{{\s*(?:(::)?\w+{sub_modules_match}\s*,\s*)*(::)?{name}{sub_modules_match}\s*(?:\s*,\s*(::)?\w+{sub_modules_match})*\s*,?\s*\}};"#
     )
 }
 
@@ -704,6 +704,16 @@ pub use {
     assert!(!test_one(
         "futures",
         r#"use not_futures::futures::stuff_in_futures;"#
+    )?);
+
+    // multi-dep single use statements with nesting
+    assert!(test_one(
+        "futures",
+        r#"pub use {
+            async_trait::{mod1, dep2},
+            futures::{futures_mod1, futures_mod2::{futures_mod21, futures_mod22}},
+            reqwest,
+        };"#
     )?);
 
     Ok(())
