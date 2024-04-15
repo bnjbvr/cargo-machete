@@ -86,7 +86,7 @@ fn make_line_regexp(name: &str) -> String {
     //   bar`.
     // - `(?i){name}(?-i)` makes the match against the crate's name case insensitive
     format!(
-        r#"use (::)?(?i){name}(?-i)(::|;| as)|\b(?i){name}(?-i)::|extern crate (?i){name}(?-i)( |;)"#
+        r#"use (::)?(?i){name}(?-i)(::|;| as)|(:?[^:]|^)\b(?i){name}(?-i)::|extern crate (?i){name}(?-i)( |;)"#
     )
 }
 
@@ -683,13 +683,13 @@ pub use futures::future;
         r#"pub use {async_trait, futures, reqwest};"#
     )?);
 
-    // No false usage detection of `not_my_dep::my_dep`
+    // No false usage detection of `not_my_dep::my_dep` on compound imports
     assert!(!test_one(
         "futures",
         r#"pub use {async_trait, not_futures::futures, reqwest};"#
     )?);
 
-    // No false usage detection of `not_my_dep::my_dep`
+    // No false usage detection of `not_my_dep::my_dep` on multiple lines
     assert!(!test_one(
         "futures",
         r#"
@@ -698,6 +698,12 @@ pub use {
     not_futures::futures,
     reqwest,
 };"#
+    )?);
+
+    // No false usage detection on single line `not_my_dep::my_dep`
+    assert!(!test_one(
+        "futures",
+        r#"use not_futures::futures::stuff_in_futures;"#
     )?);
 
     Ok(())
