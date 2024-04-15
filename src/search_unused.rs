@@ -683,6 +683,12 @@ pub use futures::future;
         r#"pub use {async_trait, futures, reqwest};"#
     )?);
 
+    // multi-dep single use statements with ::
+    assert!(test_one(
+        "futures",
+        r#"pub use {async_trait, ::futures, reqwest};"#
+    )?);
+
     // No false usage detection of `not_my_dep::my_dep` on compound imports
     assert!(!test_one(
         "futures",
@@ -712,6 +718,16 @@ pub use {
         r#"pub use {
             async_trait::{mod1, dep2},
             futures::{futures_mod1, futures_mod2::{futures_mod21, futures_mod22}},
+            reqwest,
+        };"#
+    )?);
+
+    // No false usage detection of `not_my_dep::my_dep` with nesting
+    assert!(!test_one(
+        "futures",
+        r#"pub use {
+            async_trait::{mod1, dep2},
+            not_futures::futures::{futures_mod1, futures_mod2::{futures_mod21, futures_mod22}},
             reqwest,
         };"#
     )?);
