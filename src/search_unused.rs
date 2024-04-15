@@ -683,6 +683,23 @@ pub use futures::future;
         r#"pub use {async_trait, futures, reqwest};"#
     )?);
 
+    // No false usage detection of `not_my_dep::my_dep`
+    assert!(!test_one(
+        "futures",
+        r#"pub use {async_trait, not_futures::futures, reqwest};"#
+    )?);
+
+    // No false usage detection of `not_my_dep::my_dep`
+    assert!(!test_one(
+        "futures",
+        r#"
+pub use {
+    async_trait,
+    not_futures::futures,
+    reqwest,
+};"#
+    )?);
+
     Ok(())
 }
 
