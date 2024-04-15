@@ -86,7 +86,7 @@ fn make_line_regexp(name: &str) -> String {
     //   bar`.
     // - `(?i){name}(?-i)` makes the match against the crate's name case insensitive
     format!(
-        r#"use (::)?(?i){name}(?-i)(::|;| as)|(:?[^:]|^)\b(?i){name}(?-i)::|extern crate (?i){name}(?-i)( |;)"#
+        r#"use (::)?(?i){name}(?-i)(::|;| as)|(?:[^:]|^|\W::)\b(?i){name}(?-i)::|extern crate (?i){name}(?-i)( |;)"#
     )
 }
 
@@ -731,6 +731,9 @@ pub use {
             reqwest,
         };"#
     )?);
+
+    // Detects top level usage
+    assert!(test_one("futures", r#" ::futures::mod1"#)?);
 
     Ok(())
 }
