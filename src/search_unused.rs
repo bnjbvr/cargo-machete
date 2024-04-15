@@ -1,12 +1,16 @@
 use cargo_metadata::CargoOpt;
-use grep::matcher::LineTerminator;
-use grep::regex::{RegexMatcher, RegexMatcherBuilder};
-use grep::searcher::{self, BinaryDetection, Searcher, SearcherBuilder, Sink};
+use grep::{
+    matcher::LineTerminator,
+    regex::{RegexMatcher, RegexMatcherBuilder},
+    searcher::{self, BinaryDetection, Searcher, SearcherBuilder, Sink},
+};
 use log::{debug, trace};
 use rayon::prelude::*;
-use std::collections::HashSet;
-use std::error::{self, Error};
-use std::path::{Path, PathBuf};
+use std::{
+    collections::HashSet,
+    error::{self, Error},
+    path::{Path, PathBuf},
+};
 use walkdir::WalkDir;
 
 use crate::UseCargoMetadata;
