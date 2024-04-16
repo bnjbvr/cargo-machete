@@ -107,7 +107,7 @@ fn make_multiline_regexp(name: &str) -> String {
     // engine doesn't support recursion). Therefore, sub modules are authorized up to 4 levels
     // deep.
 
-    let sub_modules_match = r#"(?:::\w+)*(?:\s+as\s+\w+|::\{[^{}]*(?:\{[^{}]*(?:\{[^{}]*(?:\{[^{}]*\})?[^{}]*\})?[^{}]*\})?[^{}]*\})?"#;
+    let sub_modules_match = r#"(?:::\w+)*(?:::\*|\s+as\s+\w+|::\{[^{}]*(?:\{[^{}]*(?:\{[^{}]*(?:\{[^{}]*\})?[^{}]*\})?[^{}]*\})?[^{}]*\})?"#;
 
     format!(
         r#"use \{{\s*(?:(::)?\w+{sub_modules_match}\s*,\s*)*(::)?{name}{sub_modules_match}\s*(?:\s*,\s*(::)?\w+{sub_modules_match})*\s*,?\s*\}};"#
@@ -718,6 +718,16 @@ pub use {
         r#"pub use {
             async_trait::{mod1, dep2},
             futures::{futures_mod1, futures_mod2::{futures_mod21, futures_mod22}},
+            reqwest,
+        };"#
+    )?);
+
+    // multi-dep single use statements with star import and renaming
+    assert!(test_one(
+        "futures",
+        r#"pub use {
+            async_trait::sub_mod::*,
+            futures as futures_renamed,
             reqwest,
         };"#
     )?);
