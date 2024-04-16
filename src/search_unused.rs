@@ -107,7 +107,7 @@ fn make_multiline_regexp(name: &str) -> String {
     // engine doesn't support recursion). Therefore, sub modules are authorized up to 4 levels
     // deep.
 
-    let sub_modules_match = r#"(?:::\w+)*(?:::\*|\s+as\s+\w+|::\{[^{}]*(?:\{[^{}]*(?:\{[^{}]*(?:\{[^{}]*\})?[^{}]*\})?[^{}]*\})?[^{}]*\})?"#;
+    let sub_modules_match = r#"(?:::\w+)*(?:::\*|\s+as\s+(?:\w+|_)|::\{(?:[^{}]*(?:\{(?:[^{}]*(?:\{(?:[^{}]*(?:\{[^{}]*\})?[^{}]*)*\})?[^{}]*)*\})?[^{}]*)*\})?"#;
 
     format!(
         r#"use \{{\s*(?:(::)?\w+{sub_modules_match}\s*,\s*)*(::)?{name}{sub_modules_match}\s*(?:\s*,\s*(::)?\w+{sub_modules_match})*\s*,?\s*\}};"#
@@ -727,6 +727,21 @@ pub use {
         "futures",
         r#"pub use {
             async_trait::sub_mod::*,
+            futures as futures_renamed,
+            reqwest,
+        };"#
+    )?);
+
+    // multi-dep single use statements with complex imports and renaming
+    assert!(test_one(
+        "futures",
+        r#"pub use {
+            other_dep::{
+                star_mod::*,
+                unnamed_import::{UnnamedTrait as _, other_mod},
+                renamed_import as new_name,
+                sub_import::{mod1, mod2},
+            },
             futures as futures_renamed,
             reqwest,
         };"#
