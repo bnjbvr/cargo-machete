@@ -37,6 +37,7 @@ jobs:
       - run: cargo test --workspace --verbose
 
   # Code from here: https://docs.github.com/en/actions/publishing-packages/publishing-docker-images
+  # TODO: Add a step to publish the image to the Docker Hub
   image:
     name: Build and push Docker image
     if : |
