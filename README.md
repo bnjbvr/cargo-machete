@@ -79,6 +79,17 @@ flag, which will call `cargo metadata --all-features` to find final dependency
 names, more accurate dependencies per build type, etc. ⚠ This may modify the
 `Cargo.lock` files in your projects.
 
+## Cargo Machete Image
+
+A docker image for cargo machete.
+
+### Example usage
+
+The command given by,
+```
+docker run -v $(pwd):/src ghcr.io/bnjbvr/cargo-machete:latest
+```
+
 ## Cargo Machete Action
 
 A github action for cargo machete.
@@ -107,16 +118,6 @@ jobs:
       - name: Machete
         uses: bnjbvr/cargo-machete@main
 ```
-
-<!--
-
-TODO: Add docker container usage after we're able to publish image, Command would be like:
-
-```bash
-docker run -v $(pwd):/src ghcr.io/bnjbvr/cargo-machete:latest
-```
-
--->
 
 ## Contributing
 
