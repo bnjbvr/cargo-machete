@@ -9,6 +9,7 @@
     <a href="https://github.com/bnjbvr/cargo-machete/actions?query=workflow%3ARust"><img src="https://github.com/bnjbvr/cargo-machete/workflows/Rust/badge.svg" alt="build status" /></a>
     <a href="https://matrix.to/#/#cargo-machete:delire.party"><img src="https://img.shields.io/badge/matrix-join_chat-brightgreen.svg" alt="matrix chat" /></a>
     <img src="https://img.shields.io/badge/rustc-stable+-green.svg" alt="supported rustc stable" />
+    <a href="https://deps.rs/repo/github/bnjbvr/cargo-machete"><img src="https://deps.rs/repo/github/bnjbvr/cargo-machete/status.svg" alt="dependency status"/></a>
   </p>
 </div>
 
@@ -106,6 +107,16 @@ jobs:
       - name: Machete
         uses: bnjbvr/cargo-machete@main
 ```
+
+<!--
+
+TODO: Add docker container usage after we're able to publish image, Command would be like:
+
+```bash
+docker run -v $(pwd):/src ghcr.io/bnjbvr/cargo-machete:latest
+```
+
+-->
 
 ## Contributing
 
