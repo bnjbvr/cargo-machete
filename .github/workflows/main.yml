@@ -38,6 +38,7 @@ jobs:
 
   # Code from here: https://docs.github.com/en/actions/publishing-packages/publishing-docker-images
   # TODO: Add a step to publish the image to the Docker Hub
+  # TODO: Build multiple images for different architectures, see this: https://docs.docker.com/build/ci/github-actions/multi-platform/
   image:
     name: Build and push Docker image
     if : |
