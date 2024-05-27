@@ -770,6 +770,48 @@ fn test_crate_renaming_works() -> anyhow::Result<()> {
 }
 
 #[test]
+fn test_unused_renamed_in_registry() -> anyhow::Result<()> {
+    // when a lib like xml-rs is exposed with a different name,
+    // cargo-machete reports the unused spec properly.
+    let analysis = find_unused(
+        &PathBuf::from(TOP_LEVEL).join("./integration-tests/unused-renamed-in-registry/Cargo.toml"),
+        UseCargoMetadata::Yes,
+    )?
+    .expect("no error during processing");
+    assert_eq!(analysis.unused, &["xml-rs".to_string()]);
+
+    Ok(())
+}
+
+#[test]
+fn test_unused_renamed_in_spec() -> anyhow::Result<()> {
+    // when a lib is renamed through key = { package = … },
+    // cargo-machete reports the unused spec properly.
+    let analysis = find_unused(
+        &PathBuf::from(TOP_LEVEL).join("./integration-tests/unused-renamed-in-spec/Cargo.toml"),
+        UseCargoMetadata::Yes,
+    )?
+    .expect("no error during processing");
+    assert_eq!(analysis.unused, &["tracing".to_string()]);
+
+    Ok(())
+}
+
+#[test]
+fn test_unused_kebab_spec() -> anyhow::Result<()> {
+    // when a lib is renamed through key = { package = … },
+    // cargo-machete reports the unused spec properly.
+    let analysis = find_unused(
+        &PathBuf::from(TOP_LEVEL).join("./integration-tests/unused-kebab-spec/Cargo.toml"),
+        UseCargoMetadata::Yes,
+    )?
+    .expect("no error during processing");
+    assert_eq!(analysis.unused, &["log-once".to_string()]);
+
+    Ok(())
+}
+
+#[test]
 fn test_ignore_deps_works() {
     // ensure that ignored deps listed in Cargo.toml package.metadata.cargo-machete.ignored are
     // correctly ignored.
