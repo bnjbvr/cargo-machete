@@ -382,10 +382,10 @@ pub(crate) fn find_unused(
                         .expect(
                             "resolved dependencies should appear under cargo-metadata packages",
                         );
-                    let mut dep_spec_it = root_package.dependencies.iter().filter(|dep_spec| {
-                        dep_spec.name == dep_pkg.name
-                            && dep_spec.source.as_ref() == dep_pkg.source.as_ref().map(|s| &s.repr)
-                    });
+                    let mut dep_spec_it = root_package
+                        .dependencies
+                        .iter()
+                        .filter(|dep_spec| dep_spec.name == dep_pkg.name);
                     // The dependency can appear more than once, for example if it is both
                     // a dependency and a dev-dependency (often with more features enabled).
                     // We'll assume cargo enforces consistency.
