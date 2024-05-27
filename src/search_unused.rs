@@ -7,7 +7,7 @@ use grep::{
 use log::{debug, trace};
 use rayon::prelude::*;
 use std::{
-    collections::HashSet,
+    collections::{BTreeMap, HashSet},
     error::{self, Error},
     path::{Path, PathBuf},
 };
@@ -193,9 +193,9 @@ struct Search {
 
 impl Search {
     fn new(crate_name: &str) -> anyhow::Result<Self> {
-        let snaked = crate_name.replace('-', "_");
+        assert!(!crate_name.contains('-'));
 
-        let line_matcher = RegexMatcher::new_line_matcher(&make_line_regexp(&snaked))?;
+        let line_matcher = RegexMatcher::new_line_matcher(&make_line_regexp(crate_name))?;
         let line_searcher = SearcherBuilder::new()
             .binary_detection(BinaryDetection::quit(b'\x00'))
             .line_terminator(LineTerminator::byte(b'\n'))
@@ -204,7 +204,7 @@ impl Search {
 
         let multiline_matcher = RegexMatcherBuilder::new()
             .multi_line(true)
-            .build(&make_multiline_regexp(&snaked))?;
+            .build(&make_multiline_regexp(crate_name))?;
         let multiline_searcher = SearcherBuilder::new()
             .binary_detection(BinaryDetection::quit(b'\x00'))
             .multi_line(true)
@@ -343,72 +343,72 @@ pub(crate) fn find_unused(
 
     // TODO extend to dev dependencies + build dependencies, and be smarter in the grouping of
     // searched paths
-    let dependencies_names: Vec<_> = if let Some(resolve) = analysis
+    // Maps dependency name (the name of the key in the Cargo.toml dependency
+    // table, can have dashes, not necessarily the name in the crate registry)
+    // to crate name (extern crate, snake case)
+    let dependencies: BTreeMap<String, String> = if let Some(metadata) = analysis
         .metadata
         .as_ref()
-        .and_then(|metadata| metadata.resolve.as_ref())
+        .filter(|metadata| metadata.resolve.is_some())
     {
-        resolve
-            .nodes
-            .iter()
-            .find(|node| {
-                // Note: this is dependent on rustc, so it's a bit fragile, and may break with
-                // nightly versions of the compiler (see cargo-machete issue #104).
-
-                // The node id can have multiple representations:
-                // - on rust 1.77 and before, something like "aa 0.1.0 (path+file:///tmp/aa)".
-                // - on rust 1.78+, something like:
-                //  - "path+file:///home/ben/cargo-machete/integration-tests/aa#0.1.0"
-                //  - "path+file:///home/ben/cargo-machete/integration-tests/directory#aa@0.1.0"
-                //
-                //  See https://doc.rust-lang.org/cargo/reference/pkgid-spec.html for the full
-                //  spec. If this breaks in the future (>= March 2024), consider using
-                //  `cargo-util-schemas`.
-                let repr = &node.id.repr;
-
-                let package_found = if repr.contains(' ') {
-                    // Rust < 1.78, take everything up to the space.
-                    node.id.repr.split(' ').next() // e.g. "aa"
-                } else {
-                    // Rust >= 1.78. Oh boy.
-                    let mut temp = None;
-
-                    let mut slash_split = node.id.repr.split('/').peekable();
-
-                    while let Some(subset) = slash_split.next() {
-                        // Continue until the last part of the path.
-                        if slash_split.peek().is_some() {
-                            continue;
-                        }
-
-                        // If there's no next slash separator, we've reached the end, and subset is
-                        // one of:
-                        // - aa#0.1.0
-                        // - directory#aa@0.1.0
-                        if subset.contains('@') {
-                            let mut hash_split = subset.split('#');
-                            // Skip everything before the hash.
-                            hash_split.next();
-                            // Now in the rest, take everything up to the @.
-                            temp = hash_split.next().and_then(|end| end.split('@').next());
-                        } else {
-                            // Otherwise, take everything up to the #.
-                            temp = subset.split('#').next();
-                        }
-                    }
-
-                    temp
-                };
-
-                package_found.map_or(false, |node_package_name| node_package_name == package_name)
-            })
-            .expect("the current package must be in the dependency graph")
-            .deps
-            .iter()
-            .map(|node_dep| node_dep.name.clone())
-            .collect()
+        let resolve = metadata.resolve.as_ref().unwrap();
+        if let Some(ref root) = resolve.root {
+            // This gives us resolved dependencies, in crate form
+            let root_node = resolve
+                .nodes
+                .iter()
+                .find(|node| node.id == *root)
+                .expect("root should be resolved by cargo-metadata");
+            // This gives us the original dependency table
+            // May have more than resolved if some were never enabled
+            let root_package = metadata
+                .packages
+                .iter()
+                .find(|pkg| pkg.id == *root)
+                .expect("root should appear under cargo-metadata packages");
+            // For every resolved dependency:
+            // look it up in the package list to find the name (the one in registries)
+            // look up that name in dependencies of the root_package;
+            // find if it uses a different key through the rename field
+            root_node
+                .deps
+                .iter()
+                .map(|dep| {
+                    let crate_name = dep.name.clone();
+                    let dep_pkg = metadata
+                        .packages
+                        .iter()
+                        .find(|pkg| pkg.id == dep.pkg)
+                        .expect(
+                            "resolved dependencies should appear under cargo-metadata packages",
+                        );
+                    let mut dep_spec_it = root_package.dependencies.iter().filter(|dep_spec| {
+                        dep_spec.name == dep_pkg.name
+                            && dep_spec.source.as_ref() == dep_pkg.source.as_ref().map(|s| &s.repr)
+                    });
+                    // The dependency can appear more than once, for example if it is both
+                    // a dependency and a dev-dependency (often with more features enabled).
+                    // We'll assume cargo enforces consistency.
+                    let dep_spec = dep_spec_it
+                        .next()
+                        .expect("resolved dependency should have a matching dependency spec");
+                    // If the dependency was renamed, through key = { package = … },
+                    // the original key is in dep_spec.rename
+                    let dep_key = dep_spec.rename.clone().unwrap_or(dep_spec.name.clone());
+                    (dep_key, crate_name)
+                })
+                .collect()
+        } else {
+            // No root -> virtual workspace, empty map
+            Default::default()
+        }
     } else {
-        analysis.manifest.dependencies.keys().cloned().collect()
+        analysis
+            .manifest
+            .dependencies
+            .keys()
+            .map(|k| (k.clone(), k.replace('-', "_")))
+            .collect()
     };
 
     // Keep a side-list of ignored dependencies (likely false positives).
@@ -430,14 +430,14 @@ pub(crate) fn find_unused(
         IgnoredButUsed(String),
     }
 
-    let results: Vec<SingleDepResult> = dependencies_names
+    let results: Vec<SingleDepResult> = dependencies
         .into_par_iter()
-        .filter_map(|name| {
-            let mut search = Search::new(&name).expect("constructing grep context");
+        .filter_map(|(dep_name, crate_name)| {
+            let mut search = Search::new(&crate_name).expect("constructing grep context");
 
             let mut found_once = false;
             for path in &paths {
-                trace!("looking for {} in {}", name, path.to_string_lossy(),);
+                trace!("looking for {} in {}", crate_name, path.to_string_lossy(),);
                 match search.search_path(path) {
                     Ok(true) => {
                         found_once = true;
@@ -451,14 +451,14 @@ pub(crate) fn find_unused(
             }
 
             if !found_once {
-                if ignored.contains(&name) || workspace_ignored.contains(&name) {
+                if ignored.contains(&dep_name) || workspace_ignored.contains(&dep_name) {
                     return None;
                 }
 
-                Some(SingleDepResult::Unused(name))
+                Some(SingleDepResult::Unused(dep_name))
             } else {
-                if ignored.contains(&name) {
-                    return Some(SingleDepResult::IgnoredButUsed(name));
+                if ignored.contains(&dep_name) {
+                    return Some(SingleDepResult::IgnoredButUsed(dep_name));
                 }
 
                 None
