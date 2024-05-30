@@ -5,7 +5,7 @@ use anyhow::Context;
 use rayon::prelude::*;
 use std::path::Path;
 use std::str::FromStr;
-use std::{fs, path::PathBuf};
+use std::{borrow::Cow, fs, path::PathBuf};
 
 #[derive(Clone, Copy)]
 pub(crate) enum UseCargoMetadata {
@@ -195,17 +195,22 @@ fn run_machete() -> anyhow::Result<bool> {
             .collect::<Vec<_>>();
 
         // Display all the results.
+        let location = match path.to_string_lossy() {
+            Cow::Borrowed(".") => Cow::from("this directory"),
+            pathstr => pathstr,
+        };
+
         if results.is_empty() {
             println!(
                 "cargo-machete didn't find any unused dependencies in {}. Good job!",
-                path.to_string_lossy()
+                location
             );
             continue;
         }
 
         println!(
             "cargo-machete found the following unused dependencies in {}:",
-            path.to_string_lossy()
+            location
         );
         for (analysis, path) in results {
             println!("{} -- {}:", analysis.package_name, path.to_string_lossy());
