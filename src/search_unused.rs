@@ -77,25 +77,41 @@ fn make_line_regexp(name: &str) -> String {
     // Syntax documentation: https://docs.rs/regex/latest/regex/#syntax
     //
     // Breaking down this regular expression: given a line,
-    // - `use (::)?(?i){name}(?-i)(::|;| as)`: matches `use foo;`, `use foo::bar`, `use foo as bar;`, with
+    // - `use (::)?(?i){name}(?-i)(::|;| as)`: matches `use foo;`, `use foo::bar`, `use foo as
+    //   bar;`, with
     // an optional "::" in front of the crate's name.
     // - `\b(?i){name}(?-i)::`: matches `foo::X`, but not `barfoo::X`. `\b` means word boundary, so
     // putting it before the crate's name ensures there's no polluting prefix.
-    // - `extern crate (?i){name}(?-i)( |;)`: matches `extern crate foo`, or `extern crate foo as bar`.
+    // - `extern crate (?i){name}(?-i)( |;)`: matches `extern crate foo`, or `extern crate foo as
+    //   bar`.
     // - `(?i){name}(?-i)` makes the match against the crate's name case insensitive
     format!(
-        r#"use (::)?(?i){name}(?-i)(::|;| as)|\b(?i){name}(?-i)::|extern crate (?i){name}(?-i)( |;)"#
+        r#"use (::)?(?i){name}(?-i)(::|;| as)|(?:[^:]|^|\W::)\b(?i){name}(?-i)::|extern crate (?i){name}(?-i)( |;)"#
     )
 }
 
 fn make_multiline_regexp(name: &str) -> String {
     // Syntax documentation: https://docs.rs/regex/latest/regex/#syntax
     //
-    // Breaking down this Terrible regular expression: tries to match compound `use as` statements,
-    // as in `use { X as Y };`, with possibly multiple-lines in between. Will match the first `};`
-    // that it finds, which *should* be the end of the use statement, but oh well.
-    // `(?i){name}(?-i)` makes the match against the crate's name case insensitive.
-    format!(r#"use \{{\s[^;]*(?i){name}(?-i)\s*as\s*[^;]*\}};"#)
+    // Breaking down this Terrible regular expression: tries to match uses of the crate's name in
+    // compound `use` statement accross multiple lines.
+    //
+    // It's split into 3 parts:
+    //   1. Matches modules before the usage of the crate's name
+    //   2. Matches the crate's name with optional sub-modules
+    //   3. Matches modules after the usage of the crate's name
+    //
+    // In order to avoid false usage detection of `not_my_dep::my_dep` the regexp unsures that the
+    // crate's name is at the top level of the use statement. However, it's not possible with
+    // regexp to allow any number of matching `{` and `}` before the crate's usage (rust regexp
+    // engine doesn't support recursion). Therefore, sub modules are authorized up to 4 levels
+    // deep.
+
+    let sub_modules_match = r#"(?:::\w+)*(?:::\*|\s+as\s+\w+|::\{(?:[^{}]*(?:\{(?:[^{}]*(?:\{(?:[^{}]*(?:\{[^{}]*\})?[^{}]*)*\})?[^{}]*)*\})?[^{}]*)*\})?"#;
+
+    format!(
+        r#"use \{{\s*(?:(::)?\w+{sub_modules_match}\s*,\s*)*(::)?{name}{sub_modules_match}\s*(?:\s*,\s*(::)?\w+{sub_modules_match})*\s*,?\s*\}};"#
+    )
 }
 
 /// Returns all the paths to the Rust source files for a crate contained at the given path.
@@ -660,6 +676,89 @@ pub use futures::future;
 
     "#
     )?);
+
+    // multi-dep single use statements
+    assert!(test_one(
+        "futures",
+        r#"pub use {async_trait, futures, reqwest};"#
+    )?);
+
+    // multi-dep single use statements with ::
+    assert!(test_one(
+        "futures",
+        r#"pub use {async_trait, ::futures, reqwest};"#
+    )?);
+
+    // No false usage detection of `not_my_dep::my_dep` on compound imports
+    assert!(!test_one(
+        "futures",
+        r#"pub use {async_trait, not_futures::futures, reqwest};"#
+    )?);
+
+    // No false usage detection of `not_my_dep::my_dep` on multiple lines
+    assert!(!test_one(
+        "futures",
+        r#"
+pub use {
+    async_trait,
+    not_futures::futures,
+    reqwest,
+};"#
+    )?);
+
+    // No false usage detection on single line `not_my_dep::my_dep`
+    assert!(!test_one(
+        "futures",
+        r#"use not_futures::futures::stuff_in_futures;"#
+    )?);
+
+    // multi-dep single use statements with nesting
+    assert!(test_one(
+        "futures",
+        r#"pub use {
+            async_trait::{mod1, dep2},
+            futures::{futures_mod1, futures_mod2::{futures_mod21, futures_mod22}},
+            reqwest,
+        };"#
+    )?);
+
+    // multi-dep single use statements with star import and renaming
+    assert!(test_one(
+        "futures",
+        r#"pub use {
+            async_trait::sub_mod::*,
+            futures as futures_renamed,
+            reqwest,
+        };"#
+    )?);
+
+    // multi-dep single use statements with complex imports and renaming
+    assert!(test_one(
+        "futures",
+        r#"pub use {
+            other_dep::{
+                star_mod::*,
+                unnamed_import::{UnnamedTrait as _, other_mod},
+                renamed_import as new_name,
+                sub_import::{mod1, mod2},
+            },
+            futures as futures_renamed,
+            reqwest,
+        };"#
+    )?);
+
+    // No false usage detection of `not_my_dep::my_dep` with nesting
+    assert!(!test_one(
+        "futures",
+        r#"pub use {
+            async_trait::{mod1, dep2},
+            not_futures::futures::{futures_mod1, futures_mod2::{futures_mod21, futures_mod22}},
+            reqwest,
+        };"#
+    )?);
+
+    // Detects top level usage
+    assert!(test_one("futures", r#" ::futures::mod1"#)?);
 
     Ok(())
 }
