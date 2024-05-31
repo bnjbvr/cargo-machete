@@ -79,13 +79,12 @@ flag, which will call `cargo metadata --all-features` to find final dependency
 names, more accurate dependencies per build type, etc. ⚠ This may modify the
 `Cargo.lock` files in your projects.
 
-## Cargo Machete Image
+## Docker Image
 
 A docker image for cargo machete.
 
-### Example usage
+For instance, run `cargo-machete` in the `$(pwd)` directory using:
 
-The command given by,
 ```
 docker run -v $(pwd):/src ghcr.io/bnjbvr/cargo-machete:latest
 ```
