@@ -9,6 +9,7 @@
     <a href="https://github.com/bnjbvr/cargo-machete/actions?query=workflow%3ARust"><img src="https://github.com/bnjbvr/cargo-machete/workflows/Rust/badge.svg" alt="build status" /></a>
     <a href="https://matrix.to/#/#cargo-machete:delire.party"><img src="https://img.shields.io/badge/matrix-join_chat-brightgreen.svg" alt="matrix chat" /></a>
     <img src="https://img.shields.io/badge/rustc-stable+-green.svg" alt="supported rustc stable" />
+    <a href="https://deps.rs/repo/github/bnjbvr/cargo-machete"><img src="https://deps.rs/repo/github/bnjbvr/cargo-machete/status.svg" alt="dependency status"/></a>
   </p>
 </div>
 
@@ -77,6 +78,16 @@ If there are too many false positives, consider using the `--with-metadata` CLI
 flag, which will call `cargo metadata --all-features` to find final dependency
 names, more accurate dependencies per build type, etc. ⚠ This may modify the
 `Cargo.lock` files in your projects.
+
+## Docker Image
+
+A docker image for cargo machete.
+
+For instance, run `cargo-machete` in the `$(pwd)` directory using:
+
+```
+docker run -v $(pwd):/src ghcr.io/bnjbvr/cargo-machete:latest
+```
 
 ## Cargo Machete Action
 
