@@ -20,22 +20,6 @@ impl UseCargoMetadata {
     }
 }
 
-impl From<UseCargoMetadata> for bool {
-    fn from(v: UseCargoMetadata) -> bool {
-        matches!(v, UseCargoMetadata::Yes)
-    }
-}
-
-impl From<bool> for UseCargoMetadata {
-    fn from(b: bool) -> Self {
-        if b {
-            Self::Yes
-        } else {
-            Self::No
-        }
-    }
-}
-
 #[derive(argh::FromArgs)]
 #[argh(description = r#"
 cargo-machete: Helps find unused dependencies in a fast yet imprecise way.
@@ -164,12 +148,18 @@ fn run_machete() -> anyhow::Result<bool> {
             }
         };
 
+        let with_metadata = if args.with_metadata {
+            UseCargoMetadata::Yes
+        } else {
+            UseCargoMetadata::No
+        };
+
         // Run analysis in parallel. This will spawn new rayon tasks when dependencies are effectively
         // used by any Rust crate.
         let results = manifest_path_entries
             .par_iter()
-            .filter_map(|manifest_path| {
-                match find_unused(manifest_path, args.with_metadata.into()) {
+            .filter_map(
+                |manifest_path| match find_unused(manifest_path, with_metadata) {
                     Ok(Some(analysis)) => {
                         if analysis.unused.is_empty() {
                             None
@@ -190,8 +180,8 @@ fn run_machete() -> anyhow::Result<bool> {
                         eprintln!("error when handling {}: {}", manifest_path.display(), err);
                         None
                     }
-                }
-            })
+                },
+            )
             .collect::<Vec<_>>();
 
         // Display all the results.

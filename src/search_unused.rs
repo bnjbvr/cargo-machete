@@ -336,7 +336,7 @@ pub(crate) fn find_unused(
         package_name.clone(),
         manifest_path,
         manifest,
-        with_cargo_metadata.into(),
+        matches!(with_cargo_metadata, UseCargoMetadata::Yes),
     )?;
 
     let paths = collect_paths(&dir_path, &analysis);
