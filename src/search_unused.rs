@@ -180,7 +180,7 @@ fn collect_paths(dir_path: &Path, analysis: &PackageAnalysis) -> Vec<PathBuf> {
 /// Performs search of the given crate name with the following strategy: first try to use the line
 /// matcher, then the multiline matcher if the line matcher failed.
 ///
-/// Splitting the single line matcher from the multiline matcher makes maintainance of the regular
+/// Splitting the single line matcher from the multiline matcher makes maintenance of the regular
 /// expressions simpler (oh well), and likely faster too since most use statements will be caught
 /// by the single line matcher.
 struct Search {
@@ -346,12 +346,11 @@ pub(crate) fn find_unused(
     // Maps dependency name (the name of the key in the Cargo.toml dependency
     // table, can have dashes, not necessarily the name in the crate registry)
     // to crate name (extern crate, snake case)
-    let dependencies: BTreeMap<String, String> = if let Some(metadata) = analysis
+    let dependencies: BTreeMap<String, String> = if let Some((metadata, resolve)) = analysis
         .metadata
         .as_ref()
-        .filter(|metadata| metadata.resolve.is_some())
+        .and_then(|metadata| metadata.resolve.as_ref().map(|resolve| (metadata, resolve)))
     {
-        let resolve = metadata.resolve.as_ref().unwrap();
         if let Some(ref root) = resolve.root {
             // This gives us resolved dependencies, in crate form
             let root_node = resolve
@@ -382,19 +381,25 @@ pub(crate) fn find_unused(
                         .expect(
                             "resolved dependencies should appear under cargo-metadata packages",
                         );
+
                     let mut dep_spec_it = root_package
                         .dependencies
                         .iter()
                         .filter(|dep_spec| dep_spec.name == dep_pkg.name);
+
                     // The dependency can appear more than once, for example if it is both
                     // a dependency and a dev-dependency (often with more features enabled).
                     // We'll assume cargo enforces consistency.
                     let dep_spec = dep_spec_it
                         .next()
                         .expect("resolved dependency should have a matching dependency spec");
+
                     // If the dependency was renamed, through key = { package = … },
-                    // the original key is in dep_spec.rename
-                    let dep_key = dep_spec.rename.clone().unwrap_or(dep_spec.name.clone());
+                    // the original key is in dep_spec.rename.
+                    let dep_key = dep_spec
+                        .rename
+                        .clone()
+                        .unwrap_or_else(|| dep_spec.name.clone());
                     (dep_key, crate_name)
                 })
                 .collect()
@@ -799,8 +804,7 @@ fn test_unused_renamed_in_spec() -> anyhow::Result<()> {
 
 #[test]
 fn test_unused_kebab_spec() -> anyhow::Result<()> {
-    // when a lib is renamed through key = { package = … },
-    // cargo-machete reports the unused spec properly.
+    // when a lib uses kebab naming, cargo-machete reports the unused spec properly.
     let analysis = find_unused(
         &PathBuf::from(TOP_LEVEL).join("./integration-tests/unused-kebab-spec/Cargo.toml"),
         UseCargoMetadata::Yes,
