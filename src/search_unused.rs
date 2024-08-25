@@ -67,8 +67,8 @@ impl PackageAnalysis {
             metadata,
             manifest,
             package_name,
-            unused: Default::default(),
-            ignored_used: Default::default(),
+            unused: Vec::default(),
+            ignored_used: Vec::default(),
         })
     }
 }
@@ -333,7 +333,7 @@ pub(crate) fn find_unused(
     debug!("handling {} ({})", package_name, dir_path.display());
 
     let mut analysis = PackageAnalysis::new(
-        package_name.clone(),
+        package_name,
         manifest_path,
         manifest,
         matches!(with_cargo_metadata, UseCargoMetadata::Yes),

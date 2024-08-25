@@ -79,9 +79,10 @@ fn collect_paths(path: &Path, options: CollectPathOptions) -> Result<Vec<PathBuf
     // `PathBuf`.
     walker
         .into_iter()
-        .filter(|entry| match entry {
-            Ok(entry) => entry.file_name() == "Cargo.toml",
-            Err(_) => true,
+        .filter(|entry| {
+            entry
+                .as_ref()
+                .map_or(true, |entry| entry.file_name() == "Cargo.toml")
         })
         .map(|res_entry| res_entry.map(|e| e.into_path()))
         .collect()
@@ -123,7 +124,6 @@ fn run_machete() -> anyhow::Result<bool> {
             "Analyzing dependencies of crates in {}...",
             args.paths
                 .iter()
-                .cloned()
                 .map(|path| path.as_os_str().to_string_lossy().to_string())
                 .collect::<Vec<_>>()
                 .join(",")
@@ -191,17 +191,11 @@ fn run_machete() -> anyhow::Result<bool> {
         };
 
         if results.is_empty() {
-            println!(
-                "cargo-machete didn't find any unused dependencies in {}. Good job!",
-                location
-            );
+            println!("cargo-machete didn't find any unused dependencies in {location}. Good job!");
             continue;
         }
 
-        println!(
-            "cargo-machete found the following unused dependencies in {}:",
-            location
-        );
+        println!("cargo-machete found the following unused dependencies in {location}:");
         for (analysis, path) in results {
             println!("{} -- {}:", analysis.package_name, path.to_string_lossy());
             for dep in &analysis.unused {
@@ -240,7 +234,7 @@ fn run_machete() -> anyhow::Result<bool> {
             );
         }
 
-        println!()
+        println!();
     }
 
     eprintln!("Done!");
