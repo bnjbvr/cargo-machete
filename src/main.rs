@@ -103,7 +103,7 @@ fn running_as_cargo_cmd() -> bool {
 /// Runs `cargo-machete`.
 /// Returns Ok with a bool whether any unused dependencies were found, or Err on errors.
 fn run_machete() -> anyhow::Result<bool> {
-    pretty_env_logger::init();
+    pretty_env_logger::init_custom_env("CARGO_MACHETE_LOG");
 
     let mut args: MacheteArgs = if running_as_cargo_cmd() {
         argh::cargo_from_env()

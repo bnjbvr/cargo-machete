@@ -2,6 +2,8 @@
 
 - Added: `--ignore` flag which make cargo-machete respect .ignore and .gitignore files when searching for files (#95).
 
+- Change log filter environment variable from `RUST_LOG` to `CARGO_MACHETE_LOG`.
+
 # 0.6.2 (released on 2024-03-24)
 
 - Added: shorter display when scanning the current directory (#109).
