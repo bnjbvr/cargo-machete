@@ -1,29 +1,29 @@
 [package]
-name = "cargo-machete"
-edition = "2021"
-version = "0.6.2"
-description = "Find unused dependencies with this one weird trick!"
-authors = ["Benjamin Bouvier <public@benj.me>"]
-repository = "https://github.com/bnjbvr/cargo-machete"
-keywords = []
-categories = []
-license = "MIT"
-readme = "README.md"
+	authors = ["Benjamin Bouvier <public@benj.me>"]
+	categories = []
+	description = "Find unused dependencies with this one weird trick!"
+	edition = "2021"
+	keywords = []
+	license = "MIT"
+	name = "cargo-machete"
+	readme = "README.md"
+	repository = "https://github.com/bnjbvr/cargo-machete"
+	version = "0.6.2"
 
 [dependencies]
-anyhow = "1.0.57"
-argh = "0.1.9"
-cargo_metadata = "0.18.0"
-cargo_toml = "0.19.1"
-grep = "0.3.1"
-ignore = "0.4.20"
-log = "0.4.16"
-pretty_env_logger = "0.5.0"
-rayon = "1.5.2"
-serde = "1.0.136"
-toml_edit = "0.22.4"
-walkdir = "2.3.2"
+	anyhow = "1.0.57"
+	argh = "0.1.9"
+	cargo_metadata = "0.18.0"
+	cargo_toml = "0.19.1"
+	grep = "0.3.1"
+	ignore = "0.4.20"
+	log = "0.4.16"
+	pretty_env_logger = "0.5.0"
+	rayon = "1.5.2"
+	serde = "1.0.136"
+	toml_edit = "0.22.4"
+	walkdir = "2.3.2"
 
-# Uncomment this for profiling.
-#[profile.release]
-#debug = true
+	# Uncomment this for profiling.
+	#[profile.release]
+	#debug = true

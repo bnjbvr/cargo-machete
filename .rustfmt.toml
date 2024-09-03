@@ -1,0 +1,71 @@
+# Configuration policy:
+# - When we don't care about the config or specifically want to follow Rust default, don't set it
+# - When we specifically want a value for the config, indicate it, even if it's the default
+#
+# When adding a configuration, please add its doc and default value. Configs should be ordered
+# alphabetically except for `edition` that should be first. See
+# https://rust-lang.github.io/rustfmt/ for more information
+
+# The edition of the parser (RFC 2052)
+edition = "2021"
+# Maximum width of an array literal before falling back to vertical formatting. Default 60
+array_width = 72
+# Maximum width of the args of a function-like attributes before falling back to vertical formatting.
+# Default 70
+attr_fn_like_width = 84
+# Maximum length of a chain to fit on a single line. Default 60
+chain_width = 72
+# Don't reformat anything. Default: false
+disable_all_formatting = false
+# Maximum width of the args of a function call before falling back to vertical formatting.
+# Default 60
+fn_call_width = 72
+# Control the layout of arguments in a function. Default: Tall
+fn_params_layout = "Tall"
+# Use tab characters for indentation, spaces for alignment. Default: false
+hard_tabs = false
+# Determines whether leading pipes are emitted on match arms. Default: Never
+match_arm_leading_pipes = "Never"
+# Put a trailing comma after a block based match arm (non-block arms are not affected).
+# Default: false
+match_block_trailing_comma = false
+# Maximum width of each line. Default: 100
+max_width = 120
+# Merge multiple `#[derive(...)]` into a single one. Default true
+merge_derives = true
+# Unix or Windows line endings, values: [Auto|Windows|Unix|Native]. Default: Auto
+newline_style = "Unix"
+# Prints the names of mismatched files that were formatted. Prints the names of files that would be
+# formated when used with `--check` mode. Default false
+print_misformatted_file_names = false
+# Remove nested parens. Default true
+remove_nested_parens = true
+# Reorder import and extern crate statements alphabetically. Default: true
+reorder_imports = true
+# Reorder module statements alphabetically in group. Default: true
+reorder_modules = true
+# Width threshold for an array element to be considered short. Default: 10
+short_array_element_width_threshold = 12
+# Maximum line length for single line if-else expressions. A value of zero means always break
+# if-else expressions. Default 50
+single_line_if_else_max_width = 60
+# Maximum line length for single line let-else statements. See the let-else statement section of the
+# Rust Style Guide for more details on when a let-else statement may be written on a single line. A
+# value of 0 (zero) means the divergent else block will always be formatted over multiple lines.
+#
+# Note this occurs when use_small_heuristics is set to Off.
+#
+# By default this option is set as a percentage of max_width provided by use_small_heuristics, but a
+# value set directly for single_line_let_else_max_width will take precedence.
+#
+# Default value: 50
+single_line_let_else_max_width = 60
+# Maximum width in the body of a struct lit before falling back to vertical formatting. Default 18
+struct_lit_width = 22
+# Maximum width in the body of a struct variant before falling back to vertical formatting.
+# Default 35
+struct_variant_width = 42
+# Use field initialization shorthand if possible. Default: false
+use_field_init_shorthand = true
+# Replace uses of the try! macro by the ? shorthand. Default: false
+use_try_shorthand = true
