@@ -80,7 +80,7 @@ fn make_line_regexp(name: &str) -> String {
     // - `use (::)?(?i){name}(?-i)(::|;| as)`: matches `use foo;`, `use foo::bar`, `use foo as bar;`, with
     // an optional "::" in front of the crate's name.
     // - `(?:[^:]|^|\W::)\b(?i){name}(?-i)::`: matches `foo::X`, but not `barfoo::X`. To ensure there's no polluting
-    //   prefix we add `(?:[^:]|^|\W::)\b` that the crate name must be prefixed by either:
+    //   prefix we add `(?:[^:]|^|\W::)\b`, meaning that the crate name must be prefixed by either:
     //    * Not a `:` (therefore not a sub module)
     //    * The start of a line
     //    * Not a word character followed by `::` (to allow ::my_crate)
