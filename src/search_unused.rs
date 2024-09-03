@@ -98,9 +98,9 @@ fn make_multiline_regexp(name: &str) -> String {
     // compound `use` statement accross multiple lines.
     //
     // It's split into 3 parts:
-    //   1. Matches modules before the usage of the crate's name
-    //   2. Matches the crate's name with optional sub-modules
-    //   3. Matches modules after the usage of the crate's name
+    //   1. Matches modules before the usage of the crate's name: `\s*(?:(::)?\w+{sub_modules_match}\s*,\s*)*`
+    //   2. Matches the crate's name with optional sub-modules: `(::)?{name}{sub_modules_match}\s*`
+    //   3. Matches modules after the usage of the crate's name: `(?:\s*,\s*(::)?\w+{sub_modules_match})*\s*,?\s*`
     //
     // In order to avoid false usage detection of `not_my_dep::my_dep` the regexp ensures that the
     // crate's name is at the top level of the use statement. However, it's not possible with
