@@ -79,8 +79,11 @@ fn make_line_regexp(name: &str) -> String {
     // Breaking down this regular expression: given a line,
     // - `use (::)?(?i){name}(?-i)(::|;| as)`: matches `use foo;`, `use foo::bar`, `use foo as bar;`, with
     // an optional "::" in front of the crate's name.
-    // - `\b(?i){name}(?-i)::`: matches `foo::X`, but not `barfoo::X`. `\b` means word boundary, so
-    // putting it before the crate's name ensures there's no polluting prefix.
+    // - `(?:[^:]|^|\W::)\b(?i){name}(?-i)::`: matches `foo::X`, but not `barfoo::X`. To ensure there's no polluting
+    //   prefix we add `(?:[^:]|^|\W::)\b` that the crate name must be prefixed by either:
+    //    * Not a `:` (therefore not a sub module)
+    //    * The start of a line
+    //    * Not a word character followed by `::` (to allow ::my_crate)
     // - `extern crate (?i){name}(?-i)( |;)`: matches `extern crate foo`, or `extern crate foo as bar`.
     // - `(?i){name}(?-i)` makes the match against the crate's name case insensitive
     format!(
@@ -99,7 +102,7 @@ fn make_multiline_regexp(name: &str) -> String {
     //   2. Matches the crate's name with optional sub-modules
     //   3. Matches modules after the usage of the crate's name
     //
-    // In order to avoid false usage detection of `not_my_dep::my_dep` the regexp unsures that the
+    // In order to avoid false usage detection of `not_my_dep::my_dep` the regexp ensures that the
     // crate's name is at the top level of the use statement. However, it's not possible with
     // regexp to allow any number of matching `{` and `}` before the crate's usage (rust regexp
     // engine doesn't support recursion). Therefore, sub modules are authorized up to 4 levels
