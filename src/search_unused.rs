@@ -95,7 +95,7 @@ fn make_multiline_regexp(name: &str) -> String {
     // Syntax documentation: https://docs.rs/regex/latest/regex/#syntax
     //
     // Breaking down this Terrible regular expression: tries to match uses of the crate's name in
-    // compound `use` statement accross multiple lines.
+    // compound `use` statement across multiple lines.
     //
     // It's split into 3 parts:
     //   1. Matches modules before the usage of the crate's name: `\s*(?:(::)?\w+{sub_modules_match}\s*,\s*)*`
