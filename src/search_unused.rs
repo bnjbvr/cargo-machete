@@ -119,8 +119,16 @@ fn make_multiline_regexp(name: &str) -> String {
 fn collect_paths(dir_path: &Path, analysis: &PackageAnalysis) -> Vec<PathBuf> {
     let mut root_paths = HashSet::new();
 
-    if let Some(path) = analysis.manifest.lib.as_ref().and_then(|lib| lib.path.as_ref()) {
-        assert!(path.ends_with(".rs"), "paths provided by cargo_toml are to Rust files");
+    if let Some(path) = analysis
+        .manifest
+        .lib
+        .as_ref()
+        .and_then(|lib| lib.path.as_ref())
+    {
+        assert!(
+            path.ends_with(".rs"),
+            "paths provided by cargo_toml are to Rust files"
+        );
         let mut path_buf = PathBuf::from(path);
         // Remove .rs extension.
         path_buf.pop();
@@ -136,7 +144,10 @@ fn collect_paths(dir_path: &Path, analysis: &PackageAnalysis) -> Vec<PathBuf> {
         .chain(analysis.manifest.example.iter())
     {
         if let Some(ref path) = product.path {
-            assert!(path.ends_with(".rs"), "paths provided by cargo_toml are to Rust files");
+            assert!(
+                path.ends_with(".rs"),
+                "paths provided by cargo_toml are to Rust files"
+            );
             let mut path_buf = PathBuf::from(path);
             // Remove .rs extension.
             path_buf.pop();
@@ -243,16 +254,22 @@ impl Search {
                     return Ok(true);
                 }
                 // Single line matcher didn't work, try the multiline matcher now.
-                func(&mut self.multiline_searcher, &self.multiline_matcher, &mut self.sink)
-                    .map_err(|err| anyhow::anyhow!("when searching with complex pattern: {err}"))
-                    .map(|()| self.sink.found)
+                func(
+                    &mut self.multiline_searcher,
+                    &self.multiline_matcher,
+                    &mut self.sink,
+                )
+                .map_err(|err| anyhow::anyhow!("when searching with complex pattern: {err}"))
+                .map(|()| self.sink.found)
             }
             Err(err) => anyhow::bail!("when searching with line pattern: {err}"),
         }
     }
 
     fn search_path(&mut self, path: &Path) -> anyhow::Result<bool> {
-        self.try_singleline_then_multiline(|searcher, matcher, sink| searcher.search_path(matcher, path, sink))
+        self.try_singleline_then_multiline(|searcher, matcher, sink| {
+            searcher.search_path(matcher, path, sink)
+        })
     }
 
     #[cfg(test)]
@@ -277,7 +294,8 @@ fn get_full_manifest(
     // `inherit_workspace`). See https://gitlab.com/crates.rs/cargo_toml/-/issues/20 for details,
     // and a possible future fix.
     let cargo_toml_content = std::fs::read(manifest_path)?;
-    let mut manifest = cargo_toml::Manifest::<PackageMetadata>::from_slice_with_metadata(&cargo_toml_content)?;
+    let mut manifest =
+        cargo_toml::Manifest::<PackageMetadata>::from_slice_with_metadata(&cargo_toml_content)?;
 
     let mut ws_manifest_and_path = None;
     let mut workspace_ignored = vec![];
@@ -666,10 +684,16 @@ pub use futures::future;
     )?);
 
     // multi-dep single use statements
-    assert!(test_one("futures", r#"pub use {async_trait, futures, reqwest};"#)?);
+    assert!(test_one(
+        "futures",
+        r#"pub use {async_trait, futures, reqwest};"#
+    )?);
 
     // multi-dep single use statements with ::
-    assert!(test_one("futures", r#"pub use {async_trait, ::futures, reqwest};"#)?);
+    assert!(test_one(
+        "futures",
+        r#"pub use {async_trait, ::futures, reqwest};"#
+    )?);
 
     // No false usage detection of `not_my_dep::my_dep` on compound imports
     assert!(!test_one(
@@ -689,7 +713,10 @@ pub use {
     )?);
 
     // No false usage detection on single line `not_my_dep::my_dep`
-    assert!(!test_one("futures", r#"use not_futures::futures::stuff_in_futures;"#)?);
+    assert!(!test_one(
+        "futures",
+        r#"use not_futures::futures::stuff_in_futures;"#
+    )?);
 
     // multi-dep single use statements with nesting
     assert!(test_one(
@@ -745,9 +772,12 @@ pub use {
 #[cfg(test)]
 fn check_analysis<F: Fn(PackageAnalysis)>(rel_path: &str, callback: F) {
     for use_cargo_metadata in UseCargoMetadata::all() {
-        let analysis = find_unused(&PathBuf::from(TOP_LEVEL).join(rel_path), *use_cargo_metadata)
-            .expect("find_unused must return an Ok result")
-            .expect("no error during processing");
+        let analysis = find_unused(
+            &PathBuf::from(TOP_LEVEL).join(rel_path),
+            *use_cargo_metadata,
+        )
+        .expect("find_unused must return an Ok result")
+        .expect("no error during processing");
         callback(analysis);
     }
 }
@@ -763,45 +793,63 @@ fn test_just_unused() {
 #[test]
 fn test_just_unused_with_manifest() {
     // a crate that does not use a dependency it refers to, and uses workspace properties
-    check_analysis("./integration-tests/workspace-package/program/Cargo.toml", |analysis| {
-        assert_eq!(analysis.unused, &["log".to_string()]);
-    });
+    check_analysis(
+        "./integration-tests/workspace-package/program/Cargo.toml",
+        |analysis| {
+            assert_eq!(analysis.unused, &["log".to_string()]);
+        },
+    );
 }
 
 #[test]
 fn test_unused_transitive() {
     // lib1 has zero dependencies
-    check_analysis("./integration-tests/unused-transitive/lib1/Cargo.toml", |analysis| {
-        assert!(analysis.unused.is_empty());
-    });
+    check_analysis(
+        "./integration-tests/unused-transitive/lib1/Cargo.toml",
+        |analysis| {
+            assert!(analysis.unused.is_empty());
+        },
+    );
 
     // lib2 effectively uses lib1
-    check_analysis("./integration-tests/unused-transitive/lib2/Cargo.toml", |analysis| {
-        assert!(analysis.unused.is_empty());
-    });
+    check_analysis(
+        "./integration-tests/unused-transitive/lib2/Cargo.toml",
+        |analysis| {
+            assert!(analysis.unused.is_empty());
+        },
+    );
 
     // but top level references both lib1 and lib2, and only uses lib2
-    check_analysis("./integration-tests/unused-transitive/Cargo.toml", |analysis| {
-        assert_eq!(analysis.unused, &["lib1".to_string()]);
-    });
+    check_analysis(
+        "./integration-tests/unused-transitive/Cargo.toml",
+        |analysis| {
+            assert_eq!(analysis.unused, &["lib1".to_string()]);
+        },
+    );
 }
 
 #[test]
 fn test_false_positive_macro_use() {
     // when a lib uses a dependency via a macro, there's no way we can find it by scanning the
     // source code.
-    check_analysis("./integration-tests/false-positive-log/Cargo.toml", |analysis| {
-        assert_eq!(analysis.unused, &["log".to_string()]);
-    });
+    check_analysis(
+        "./integration-tests/false-positive-log/Cargo.toml",
+        |analysis| {
+            assert_eq!(analysis.unused, &["log".to_string()]);
+        },
+    );
 }
 
 #[test]
 fn test_with_bench() {
     // when a package has a bench file designated by binary name, it seems that `cargo_toml`
     // doesn't fill in a default path to the source code.
-    check_analysis("./integration-tests/with-bench/bench/Cargo.toml", |analysis| {
-        assert!(analysis.unused.is_empty());
-    });
+    check_analysis(
+        "./integration-tests/with-bench/bench/Cargo.toml",
+        |analysis| {
+            assert!(analysis.unused.is_empty());
+        },
+    );
 }
 
 #[test]
