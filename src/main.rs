@@ -45,9 +45,9 @@ struct MacheteArgs {
     #[argh(switch)]
     fix: bool,
 
-    /// respect ignore files (.gitignore, .ignore, etc.) when searching for files.
+    /// also search in ignored files (.gitignore, .ignore, etc.) when searching for files.
     #[argh(switch)]
-    ignore: bool,
+    no_ignore: bool,
 
     /// print version.
     #[argh(switch)]
@@ -138,7 +138,7 @@ fn run_machete() -> anyhow::Result<bool> {
             &path,
             CollectPathOptions {
                 skip_target_dir: args.skip_target_dir,
-                respect_ignore_files: args.ignore,
+                respect_ignore_files: !args.no_ignore,
             },
         ) {
             Ok(entries) => entries,
