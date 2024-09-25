@@ -1,5 +1,10 @@
-# unreleased
+# 0.7.0 (released on 2024-09-25)
 
+- Breaking change: Don't search in ignored files (those specified in .ignore/.gitignore) by default. It's possible to use `--no-ignore` to search in these directories by default (#137).
+- Improved: fix false positives for multi dependencies single use statements (#120). This improves precision at the cost of a small performance hit.
+- Improved: make usage of `--with-medata` more accurate (#122, #132).
+- Improved: instead of displaying `.` for the current directory, `cargo-machete` will now display `this directory` (#109).
+- Added: There's now an automated docker image build that publishes to the [github repository](https://github.com/bnjbvr/cargo-machete/pkgs/container/cargo-machete) (#121).
 - Added: `--ignore` flag which make cargo-machete respect .ignore and .gitignore files when searching for files (#95).
 
 # 0.6.2 (released on 2024-03-24)
