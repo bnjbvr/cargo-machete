@@ -89,7 +89,7 @@ jobs:
     strategy:
       matrix:
         include:
-          - os: ubuntu-20.04
+          - os: ubuntu-22.04
             rust: stable
             target: x86_64-unknown-linux-musl
             bin: cargo-machete
@@ -97,11 +97,11 @@ jobs:
             rust: stable
             target: x86_64-pc-windows-msvc
             bin: cargo-machete.exe
-          - os: macos-11
+          - os: macos-14
             rust: stable
             target: x86_64-apple-darwin
             bin: cargo-machete
-          - os: macos-11
+          - os: macos-14
             rust: stable
             target: aarch64-apple-darwin
             bin: cargo-machete
@@ -113,7 +113,7 @@ jobs:
           toolchain: ${{ matrix.rust }}
           target: ${{ matrix.target }}
       - name: Install musl tools
-        if: matrix.os == 'ubuntu-20.04'
+        if: matrix.os == 'ubuntu-22.04'
         run: |
           sudo apt-get install -y musl-tools
       - name: Checkout
