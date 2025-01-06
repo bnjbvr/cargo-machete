@@ -181,7 +181,7 @@ fn collect_paths(dir_path: &Path, analysis: &PackageAnalysis) -> Vec<PathBuf> {
             if dir_entry
                 .path()
                 .extension()
-                .map_or(true, |ext| ext.to_string_lossy() != "rs")
+                .is_none_or(|ext| ext.to_string_lossy() != "rs")
             {
                 return None;
             }
