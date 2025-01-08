@@ -5,7 +5,7 @@ use anyhow::Context;
 use rayon::prelude::*;
 use std::path::Path;
 use std::str::FromStr;
-use std::{fs, path::PathBuf};
+use std::{borrow::Cow, fs, path::PathBuf};
 
 #[derive(Clone, Copy)]
 pub(crate) enum UseCargoMetadata {
@@ -17,22 +17,6 @@ pub(crate) enum UseCargoMetadata {
 impl UseCargoMetadata {
     fn all() -> &'static [UseCargoMetadata] {
         &[UseCargoMetadata::Yes, UseCargoMetadata::No]
-    }
-}
-
-impl From<UseCargoMetadata> for bool {
-    fn from(v: UseCargoMetadata) -> bool {
-        matches!(v, UseCargoMetadata::Yes)
-    }
-}
-
-impl From<bool> for UseCargoMetadata {
-    fn from(b: bool) -> Self {
-        if b {
-            Self::Yes
-        } else {
-            Self::No
-        }
     }
 }
 
@@ -61,9 +45,9 @@ struct MacheteArgs {
     #[argh(switch)]
     fix: bool,
 
-    /// respect ignore files (.gitignore, .ignore, etc.) when searching for files.
+    /// also search in ignored files (.gitignore, .ignore, etc.) when searching for files.
     #[argh(switch)]
-    ignore: bool,
+    no_ignore: bool,
 
     /// print version.
     #[argh(switch)]
@@ -95,9 +79,10 @@ fn collect_paths(path: &Path, options: CollectPathOptions) -> Result<Vec<PathBuf
     // `PathBuf`.
     walker
         .into_iter()
-        .filter(|entry| match entry {
-            Ok(entry) => entry.file_name() == "Cargo.toml",
-            Err(_) => true,
+        .filter(|entry| {
+            entry
+                .as_ref()
+                .map_or(true, |entry| entry.file_name() == "Cargo.toml")
         })
         .map(|res_entry| res_entry.map(|e| e.into_path()))
         .collect()
@@ -139,7 +124,6 @@ fn run_machete() -> anyhow::Result<bool> {
             "Analyzing dependencies of crates in {}...",
             args.paths
                 .iter()
-                .cloned()
                 .map(|path| path.as_os_str().to_string_lossy().to_string())
                 .collect::<Vec<_>>()
                 .join(",")
@@ -154,7 +138,7 @@ fn run_machete() -> anyhow::Result<bool> {
             &path,
             CollectPathOptions {
                 skip_target_dir: args.skip_target_dir,
-                respect_ignore_files: args.ignore,
+                respect_ignore_files: !args.no_ignore,
             },
         ) {
             Ok(entries) => entries,
@@ -164,12 +148,18 @@ fn run_machete() -> anyhow::Result<bool> {
             }
         };
 
+        let with_metadata = if args.with_metadata {
+            UseCargoMetadata::Yes
+        } else {
+            UseCargoMetadata::No
+        };
+
         // Run analysis in parallel. This will spawn new rayon tasks when dependencies are effectively
         // used by any Rust crate.
         let results = manifest_path_entries
             .par_iter()
-            .filter_map(|manifest_path| {
-                match find_unused(manifest_path, args.with_metadata.into()) {
+            .filter_map(
+                |manifest_path| match find_unused(manifest_path, with_metadata) {
                     Ok(Some(analysis)) => {
                         if analysis.unused.is_empty() {
                             None
@@ -190,23 +180,22 @@ fn run_machete() -> anyhow::Result<bool> {
                         eprintln!("error when handling {}: {}", manifest_path.display(), err);
                         None
                     }
-                }
-            })
+                },
+            )
             .collect::<Vec<_>>();
 
         // Display all the results.
+        let location = match path.to_string_lossy() {
+            Cow::Borrowed(".") => Cow::from("this directory"),
+            pathstr => pathstr,
+        };
+
         if results.is_empty() {
-            println!(
-                "cargo-machete didn't find any unused dependencies in {}. Good job!",
-                path.to_string_lossy()
-            );
+            println!("cargo-machete didn't find any unused dependencies in {location}. Good job!");
             continue;
         }
 
-        println!(
-            "cargo-machete found the following unused dependencies in {}:",
-            path.to_string_lossy()
-        );
+        println!("cargo-machete found the following unused dependencies in {location}:");
         for (analysis, path) in results {
             println!("{} -- {}:", analysis.package_name, path.to_string_lossy());
             for dep in &analysis.unused {
@@ -245,7 +234,7 @@ fn run_machete() -> anyhow::Result<bool> {
             );
         }
 
-        println!()
+        println!();
     }
 
     eprintln!("Done!");

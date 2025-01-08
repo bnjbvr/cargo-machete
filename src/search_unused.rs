@@ -7,7 +7,7 @@ use grep::{
 use log::{debug, trace};
 use rayon::prelude::*;
 use std::{
-    collections::HashSet,
+    collections::{BTreeMap, HashSet},
     error::{self, Error},
     path::{Path, PathBuf},
 };
@@ -67,8 +67,8 @@ impl PackageAnalysis {
             metadata,
             manifest,
             package_name,
-            unused: Default::default(),
-            ignored_used: Default::default(),
+            unused: Vec::default(),
+            ignored_used: Vec::default(),
         })
     }
 }
@@ -79,23 +79,40 @@ fn make_line_regexp(name: &str) -> String {
     // Breaking down this regular expression: given a line,
     // - `use (::)?(?i){name}(?-i)(::|;| as)`: matches `use foo;`, `use foo::bar`, `use foo as bar;`, with
     // an optional "::" in front of the crate's name.
-    // - `\b(?i){name}(?-i)::`: matches `foo::X`, but not `barfoo::X`. `\b` means word boundary, so
-    // putting it before the crate's name ensures there's no polluting prefix.
+    // - `(?:[^:]|^|\W::)\b(?i){name}(?-i)::`: matches `foo::X`, but not `barfoo::X`. To ensure there's no polluting
+    //   prefix we add `(?:[^:]|^|\W::)\b`, meaning that the crate name must be prefixed by either:
+    //    * Not a `:` (therefore not a sub module)
+    //    * The start of a line
+    //    * Not a word character followed by `::` (to allow ::my_crate)
     // - `extern crate (?i){name}(?-i)( |;)`: matches `extern crate foo`, or `extern crate foo as bar`.
     // - `(?i){name}(?-i)` makes the match against the crate's name case insensitive
     format!(
-        r#"use (::)?(?i){name}(?-i)(::|;| as)|\b(?i){name}(?-i)::|extern crate (?i){name}(?-i)( |;)"#
+        r#"use (::)?(?i){name}(?-i)(::|;| as)|(?:[^:]|^|\W::)\b(?i){name}(?-i)::|extern crate (?i){name}(?-i)( |;)"#
     )
 }
 
 fn make_multiline_regexp(name: &str) -> String {
     // Syntax documentation: https://docs.rs/regex/latest/regex/#syntax
     //
-    // Breaking down this Terrible regular expression: tries to match compound `use as` statements,
-    // as in `use { X as Y };`, with possibly multiple-lines in between. Will match the first `};`
-    // that it finds, which *should* be the end of the use statement, but oh well.
-    // `(?i){name}(?-i)` makes the match against the crate's name case insensitive.
-    format!(r#"use \{{\s[^;]*(?i){name}(?-i)\s*as\s*[^;]*\}};"#)
+    // Breaking down this Terrible regular expression: tries to match uses of the crate's name in
+    // compound `use` statement across multiple lines.
+    //
+    // It's split into 3 parts:
+    //   1. Matches modules before the usage of the crate's name: `\s*(?:(::)?\w+{sub_modules_match}\s*,\s*)*`
+    //   2. Matches the crate's name with optional sub-modules: `(::)?{name}{sub_modules_match}\s*`
+    //   3. Matches modules after the usage of the crate's name: `(?:\s*,\s*(::)?\w+{sub_modules_match})*\s*,?\s*`
+    //
+    // In order to avoid false usage detection of `not_my_dep::my_dep` the regexp ensures that the
+    // crate's name is at the top level of the use statement. However, it's not possible with
+    // regexp to allow any number of matching `{` and `}` before the crate's usage (rust regexp
+    // engine doesn't support recursion). Therefore, sub modules are authorized up to 4 levels
+    // deep.
+
+    let sub_modules_match = r#"(?:::\w+)*(?:::\*|\s+as\s+\w+|::\{(?:[^{}]*(?:\{(?:[^{}]*(?:\{(?:[^{}]*(?:\{[^{}]*\})?[^{}]*)*\})?[^{}]*)*\})?[^{}]*)*\})?"#;
+
+    format!(
+        r#"use \{{\s*(?:(::)?\w+{sub_modules_match}\s*,\s*)*(::)?{name}{sub_modules_match}\s*(?:\s*,\s*(::)?\w+{sub_modules_match})*\s*,?\s*\}};"#
+    )
 }
 
 /// Returns all the paths to the Rust source files for a crate contained at the given path.
@@ -164,7 +181,7 @@ fn collect_paths(dir_path: &Path, analysis: &PackageAnalysis) -> Vec<PathBuf> {
             if dir_entry
                 .path()
                 .extension()
-                .map_or(true, |ext| ext.to_string_lossy() != "rs")
+                .is_none_or(|ext| ext.to_string_lossy() != "rs")
             {
                 return None;
             }
@@ -180,7 +197,7 @@ fn collect_paths(dir_path: &Path, analysis: &PackageAnalysis) -> Vec<PathBuf> {
 /// Performs search of the given crate name with the following strategy: first try to use the line
 /// matcher, then the multiline matcher if the line matcher failed.
 ///
-/// Splitting the single line matcher from the multiline matcher makes maintainance of the regular
+/// Splitting the single line matcher from the multiline matcher makes maintenance of the regular
 /// expressions simpler (oh well), and likely faster too since most use statements will be caught
 /// by the single line matcher.
 struct Search {
@@ -193,9 +210,9 @@ struct Search {
 
 impl Search {
     fn new(crate_name: &str) -> anyhow::Result<Self> {
-        let snaked = crate_name.replace('-', "_");
+        assert!(!crate_name.contains('-'));
 
-        let line_matcher = RegexMatcher::new_line_matcher(&make_line_regexp(&snaked))?;
+        let line_matcher = RegexMatcher::new_line_matcher(&make_line_regexp(crate_name))?;
         let line_searcher = SearcherBuilder::new()
             .binary_detection(BinaryDetection::quit(b'\x00'))
             .line_terminator(LineTerminator::byte(b'\n'))
@@ -204,7 +221,7 @@ impl Search {
 
         let multiline_matcher = RegexMatcherBuilder::new()
             .multi_line(true)
-            .build(&make_multiline_regexp(&snaked))?;
+            .build(&make_multiline_regexp(crate_name))?;
         let multiline_searcher = SearcherBuilder::new()
             .binary_detection(BinaryDetection::quit(b'\x00'))
             .multi_line(true)
@@ -333,82 +350,87 @@ pub(crate) fn find_unused(
     debug!("handling {} ({})", package_name, dir_path.display());
 
     let mut analysis = PackageAnalysis::new(
-        package_name.clone(),
+        package_name,
         manifest_path,
         manifest,
-        with_cargo_metadata.into(),
+        matches!(with_cargo_metadata, UseCargoMetadata::Yes),
     )?;
 
     let paths = collect_paths(&dir_path, &analysis);
 
     // TODO extend to dev dependencies + build dependencies, and be smarter in the grouping of
     // searched paths
-    let dependencies_names: Vec<_> = if let Some(resolve) = analysis
+    // Maps dependency name (the name of the key in the Cargo.toml dependency
+    // table, can have dashes, not necessarily the name in the crate registry)
+    // to crate name (extern crate, snake case)
+    let dependencies: BTreeMap<String, String> = if let Some((metadata, resolve)) = analysis
         .metadata
         .as_ref()
-        .and_then(|metadata| metadata.resolve.as_ref())
+        .and_then(|metadata| metadata.resolve.as_ref().map(|resolve| (metadata, resolve)))
     {
-        resolve
-            .nodes
-            .iter()
-            .find(|node| {
-                // Note: this is dependent on rustc, so it's a bit fragile, and may break with
-                // nightly versions of the compiler (see cargo-machete issue #104).
+        if let Some(ref root) = resolve.root {
+            // This gives us resolved dependencies, in crate form
+            let root_node = resolve
+                .nodes
+                .iter()
+                .find(|node| node.id == *root)
+                .expect("root should be resolved by cargo-metadata");
+            // This gives us the original dependency table
+            // May have more than resolved if some were never enabled
+            let root_package = metadata
+                .packages
+                .iter()
+                .find(|pkg| pkg.id == *root)
+                .expect("root should appear under cargo-metadata packages");
+            // For every resolved dependency:
+            // look it up in the package list to find the name (the one in registries)
+            // look up that name in dependencies of the root_package;
+            // find if it uses a different key through the rename field
+            root_node
+                .deps
+                .iter()
+                .map(|dep| {
+                    let crate_name = dep.name.clone();
+                    let dep_pkg = metadata
+                        .packages
+                        .iter()
+                        .find(|pkg| pkg.id == dep.pkg)
+                        .expect(
+                            "resolved dependencies should appear under cargo-metadata packages",
+                        );
 
-                // The node id can have multiple representations:
-                // - on rust 1.77 and before, something like "aa 0.1.0 (path+file:///tmp/aa)".
-                // - on rust 1.78+, something like:
-                //  - "path+file:///home/ben/cargo-machete/integration-tests/aa#0.1.0"
-                //  - "path+file:///home/ben/cargo-machete/integration-tests/directory#aa@0.1.0"
-                //
-                //  See https://doc.rust-lang.org/cargo/reference/pkgid-spec.html for the full
-                //  spec. If this breaks in the future (>= March 2024), consider using
-                //  `cargo-util-schemas`.
-                let repr = &node.id.repr;
+                    let mut dep_spec_it = root_package
+                        .dependencies
+                        .iter()
+                        .filter(|dep_spec| dep_spec.name == dep_pkg.name);
 
-                let package_found = if repr.contains(' ') {
-                    // Rust < 1.78, take everything up to the space.
-                    node.id.repr.split(' ').next() // e.g. "aa"
-                } else {
-                    // Rust >= 1.78. Oh boy.
-                    let mut temp = None;
+                    // The dependency can appear more than once, for example if it is both
+                    // a dependency and a dev-dependency (often with more features enabled).
+                    // We'll assume cargo enforces consistency.
+                    let dep_spec = dep_spec_it
+                        .next()
+                        .expect("resolved dependency should have a matching dependency spec");
 
-                    let mut slash_split = node.id.repr.split('/').peekable();
-
-                    while let Some(subset) = slash_split.next() {
-                        // Continue until the last part of the path.
-                        if slash_split.peek().is_some() {
-                            continue;
-                        }
-
-                        // If there's no next slash separator, we've reached the end, and subset is
-                        // one of:
-                        // - aa#0.1.0
-                        // - directory#aa@0.1.0
-                        if subset.contains('@') {
-                            let mut hash_split = subset.split('#');
-                            // Skip everything before the hash.
-                            hash_split.next();
-                            // Now in the rest, take everything up to the @.
-                            temp = hash_split.next().and_then(|end| end.split('@').next());
-                        } else {
-                            // Otherwise, take everything up to the #.
-                            temp = subset.split('#').next();
-                        }
-                    }
-
-                    temp
-                };
-
-                package_found.map_or(false, |node_package_name| node_package_name == package_name)
-            })
-            .expect("the current package must be in the dependency graph")
-            .deps
-            .iter()
-            .map(|node_dep| node_dep.name.clone())
-            .collect()
+                    // If the dependency was renamed, through key = { package = … },
+                    // the original key is in dep_spec.rename.
+                    let dep_key = dep_spec
+                        .rename
+                        .clone()
+                        .unwrap_or_else(|| dep_spec.name.clone());
+                    (dep_key, crate_name)
+                })
+                .collect()
+        } else {
+            // No root -> virtual workspace, empty map
+            Default::default()
+        }
     } else {
-        analysis.manifest.dependencies.keys().cloned().collect()
+        analysis
+            .manifest
+            .dependencies
+            .keys()
+            .map(|k| (k.clone(), k.replace('-', "_")))
+            .collect()
     };
 
     // Keep a side-list of ignored dependencies (likely false positives).
@@ -430,14 +452,14 @@ pub(crate) fn find_unused(
         IgnoredButUsed(String),
     }
 
-    let results: Vec<SingleDepResult> = dependencies_names
+    let results: Vec<SingleDepResult> = dependencies
         .into_par_iter()
-        .filter_map(|name| {
-            let mut search = Search::new(&name).expect("constructing grep context");
+        .filter_map(|(dep_name, crate_name)| {
+            let mut search = Search::new(&crate_name).expect("constructing grep context");
 
             let mut found_once = false;
             for path in &paths {
-                trace!("looking for {} in {}", name, path.to_string_lossy(),);
+                trace!("looking for {} in {}", crate_name, path.to_string_lossy(),);
                 match search.search_path(path) {
                     Ok(true) => {
                         found_once = true;
@@ -451,14 +473,14 @@ pub(crate) fn find_unused(
             }
 
             if !found_once {
-                if ignored.contains(&name) || workspace_ignored.contains(&name) {
+                if ignored.contains(&dep_name) || workspace_ignored.contains(&dep_name) {
                     return None;
                 }
 
-                Some(SingleDepResult::Unused(name))
+                Some(SingleDepResult::Unused(dep_name))
             } else {
-                if ignored.contains(&name) {
-                    return Some(SingleDepResult::IgnoredButUsed(name));
+                if ignored.contains(&dep_name) {
+                    return Some(SingleDepResult::IgnoredButUsed(dep_name));
                 }
 
                 None
@@ -661,6 +683,89 @@ pub use futures::future;
     "#
     )?);
 
+    // multi-dep single use statements
+    assert!(test_one(
+        "futures",
+        r#"pub use {async_trait, futures, reqwest};"#
+    )?);
+
+    // multi-dep single use statements with ::
+    assert!(test_one(
+        "futures",
+        r#"pub use {async_trait, ::futures, reqwest};"#
+    )?);
+
+    // No false usage detection of `not_my_dep::my_dep` on compound imports
+    assert!(!test_one(
+        "futures",
+        r#"pub use {async_trait, not_futures::futures, reqwest};"#
+    )?);
+
+    // No false usage detection of `not_my_dep::my_dep` on multiple lines
+    assert!(!test_one(
+        "futures",
+        r#"
+pub use {
+    async_trait,
+    not_futures::futures,
+    reqwest,
+};"#
+    )?);
+
+    // No false usage detection on single line `not_my_dep::my_dep`
+    assert!(!test_one(
+        "futures",
+        r#"use not_futures::futures::stuff_in_futures;"#
+    )?);
+
+    // multi-dep single use statements with nesting
+    assert!(test_one(
+        "futures",
+        r#"pub use {
+            async_trait::{mod1, dep2},
+            futures::{futures_mod1, futures_mod2::{futures_mod21, futures_mod22}},
+            reqwest,
+        };"#
+    )?);
+
+    // multi-dep single use statements with star import and renaming
+    assert!(test_one(
+        "futures",
+        r#"pub use {
+            async_trait::sub_mod::*,
+            futures as futures_renamed,
+            reqwest,
+        };"#
+    )?);
+
+    // multi-dep single use statements with complex imports and renaming
+    assert!(test_one(
+        "futures",
+        r#"pub use {
+            other_dep::{
+                star_mod::*,
+                unnamed_import::{UnnamedTrait as _, other_mod},
+                renamed_import as new_name,
+                sub_import::{mod1, mod2},
+            },
+            futures as futures_renamed,
+            reqwest,
+        };"#
+    )?);
+
+    // No false usage detection of `not_my_dep::my_dep` with nesting
+    assert!(!test_one(
+        "futures",
+        r#"pub use {
+            async_trait::{mod1, dep2},
+            not_futures::futures::{futures_mod1, futures_mod2::{futures_mod21, futures_mod22}},
+            reqwest,
+        };"#
+    )?);
+
+    // Detects top level usage
+    assert!(test_one("futures", r#" ::futures::mod1"#)?);
+
     Ok(())
 }
 
@@ -765,6 +870,47 @@ fn test_crate_renaming_works() -> anyhow::Result<()> {
     )?
     .expect("no error during processing");
     assert_eq!(analysis.unused, &["xml-rs".to_string()]);
+
+    Ok(())
+}
+
+#[test]
+fn test_unused_renamed_in_registry() -> anyhow::Result<()> {
+    // when a lib like xml-rs is exposed with a different name,
+    // cargo-machete reports the unused spec properly.
+    let analysis = find_unused(
+        &PathBuf::from(TOP_LEVEL).join("./integration-tests/unused-renamed-in-registry/Cargo.toml"),
+        UseCargoMetadata::Yes,
+    )?
+    .expect("no error during processing");
+    assert_eq!(analysis.unused, &["xml-rs".to_string()]);
+
+    Ok(())
+}
+
+#[test]
+fn test_unused_renamed_in_spec() -> anyhow::Result<()> {
+    // when a lib is renamed through key = { package = … },
+    // cargo-machete reports the unused spec properly.
+    let analysis = find_unused(
+        &PathBuf::from(TOP_LEVEL).join("./integration-tests/unused-renamed-in-spec/Cargo.toml"),
+        UseCargoMetadata::Yes,
+    )?
+    .expect("no error during processing");
+    assert_eq!(analysis.unused, &["tracing".to_string()]);
+
+    Ok(())
+}
+
+#[test]
+fn test_unused_kebab_spec() -> anyhow::Result<()> {
+    // when a lib uses kebab naming, cargo-machete reports the unused spec properly.
+    let analysis = find_unused(
+        &PathBuf::from(TOP_LEVEL).join("./integration-tests/unused-kebab-spec/Cargo.toml"),
+        UseCargoMetadata::Yes,
+    )?
+    .expect("no error during processing");
+    assert_eq!(analysis.unused, &["log-once".to_string()]);
 
     Ok(())
 }
