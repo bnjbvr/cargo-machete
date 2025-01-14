@@ -192,7 +192,7 @@ fn run_machete() -> anyhow::Result<bool> {
                     }
 
                     Err(err) => {
-                        eprintln!("error when handling {}: {}", manifest_path.display(), err);
+                        eprintln!("error when handling {}: {:#}", manifest_path.display(), err);
                         None
                     }
                 },
