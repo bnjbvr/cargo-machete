@@ -59,8 +59,18 @@ struct MacheteArgs {
 }
 
 struct CollectPathOptions {
+    /// Should we avoid scanning `target` directories?
     skip_target_dir: bool,
+
+    /// Should we ignore files as specified in .gitignore (in the target directory, or any parent),
+    /// and `.ignore`?
     respect_ignore_files: bool,
+
+    // As an override to the above `respect_ignore_files`, should we use `.gitignore` overall?
+    //
+    // This is used only in testing, to avoid reading this repository's `.gitignore` file for
+    // testing the `collect_path()` function.
+    override_respect_git_ignore: Option<bool>,
 }
 
 fn collect_paths(path: &Path, options: CollectPathOptions) -> Result<Vec<PathBuf>, ignore::Error> {
@@ -68,6 +78,10 @@ fn collect_paths(path: &Path, options: CollectPathOptions) -> Result<Vec<PathBuf
     let mut builder = ignore::WalkBuilder::new(path);
 
     builder.standard_filters(options.respect_ignore_files);
+
+    if let Some(val) = options.override_respect_git_ignore {
+        builder.git_ignore(val);
+    }
 
     if options.skip_target_dir {
         builder.filter_entry(|entry| !entry.path().ends_with("target"));
@@ -139,6 +153,7 @@ fn run_machete() -> anyhow::Result<bool> {
             CollectPathOptions {
                 skip_target_dir: args.skip_target_dir,
                 respect_ignore_files: !args.no_ignore,
+                override_respect_git_ignore: None,
             },
         ) {
             Ok(entries) => entries,
@@ -296,6 +311,7 @@ fn test_ignore_target() {
         CollectPathOptions {
             skip_target_dir: true,
             respect_ignore_files: false,
+            override_respect_git_ignore: Some(false),
         },
     );
     assert!(entries.unwrap().is_empty());
@@ -305,6 +321,7 @@ fn test_ignore_target() {
         CollectPathOptions {
             skip_target_dir: false,
             respect_ignore_files: true,
+            override_respect_git_ignore: Some(false),
         },
     );
     assert!(entries.unwrap().is_empty());
@@ -314,6 +331,7 @@ fn test_ignore_target() {
         CollectPathOptions {
             skip_target_dir: false,
             respect_ignore_files: false,
+            override_respect_git_ignore: Some(false),
         },
     );
     assert!(!entries.unwrap().is_empty());
