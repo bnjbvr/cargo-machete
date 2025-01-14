@@ -4,7 +4,7 @@ use grep::{
     regex::{RegexMatcher, RegexMatcherBuilder},
     searcher::{self, BinaryDetection, Searcher, SearcherBuilder, Sink},
 };
-use log::{debug, trace};
+use log::{debug, trace, warn};
 use rayon::prelude::*;
 use std::{
     collections::{BTreeMap, HashSet},
@@ -300,7 +300,14 @@ fn get_full_manifest(
     let mut ws_manifest_and_path = None;
     let mut workspace_ignored = vec![];
 
-    let mut dir_path = dir_path.to_path_buf();
+    // Canonicalize the path, so as to get the full "parenthood" of relative paths.
+    let mut dir_path = std::fs::canonicalize(dir_path).unwrap_or_else(|err| {
+        warn!("error when canonicalizing dir_path: {err}");
+        dir_path.to_owned()
+    });
+
+    // Try to find a workspace manifest, starting from the current directory, going up to the
+    // filesystem's root.
     while dir_path.pop() {
         let workspace_cargo_path = dir_path.join("Cargo.toml");
         if let Ok(workspace_manifest) =
@@ -936,4 +943,30 @@ fn test_ignore_deps_workspace_works() {
             assert_eq!(analysis.ignored_used, &["rand_core".to_string()]);
         },
     );
+}
+
+#[test]
+fn test_workspace_from_relative_path() {
+    // Ensure that finding a workspace using a relative path works.
+    use std::env::{current_dir, set_current_dir};
+
+    let prev_cwd = current_dir().unwrap();
+
+    set_current_dir(
+        PathBuf::from(TOP_LEVEL).join("./integration-tests/workspace-package/program/"),
+    )
+    .unwrap();
+
+    let path = Path::new("./Cargo.toml");
+    let analysis = find_unused(&path, UseCargoMetadata::No);
+
+    // Reset the current directory *before* running any other check.
+    set_current_dir(prev_cwd).unwrap();
+
+    let analysis = analysis
+        .expect("find_unused must return an Ok result")
+        .expect("no error during processing");
+
+    assert_eq!(analysis.unused, &["log".to_string()]);
+    assert!(analysis.ignored_used.is_empty());
 }
