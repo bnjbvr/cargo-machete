@@ -7,10 +7,11 @@ on:
     tags:
       - "*"
   pull_request:
-    branches: [ main ]
+    branches: [main]
 
 jobs:
   ci:
+    name: CI
     env:
       RUST_BACKTRACE: 1
     runs-on: ubuntu-latest
@@ -35,7 +36,26 @@ jobs:
       - run: cargo clippy --all --all-features -- -D warnings
 
       - run: cargo test --workspace --verbose
-
+  autofix:
+    name: Autofix Tests
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+    steps:
+      - uses: actions/checkout@v3
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+          components: clippy, rustfmt
+      - run: cargo build --release
+      - run: cargo install --path .
+      - run: |
+          for dir in cli-tests/actual/*; do
+            if [ -d "$dir" ]; then
+              cd "$dir" && cargo machete --fix || true
+            fi
+          done
+      - run: cd cli-tests && diff -r expected actual
   # Code from here: https://docs.github.com/en/actions/publishing-packages/publishing-docker-images
   # TODO: Add a step to publish the image to the Docker Hub
   # TODO: Build multiple images for different architectures, see this: https://docs.docker.com/build/ci/github-actions/multi-platform/
@@ -80,8 +100,6 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-
-
   # Code mutably borrowed from https://github.com/EmbarkStudios/cargo-deny/, thanks Embark!
   release:
     name: Release
