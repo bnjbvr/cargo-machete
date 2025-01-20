@@ -970,3 +970,12 @@ fn test_workspace_from_relative_path() {
     assert_eq!(analysis.unused, &["log".to_string()]);
     assert!(analysis.ignored_used.is_empty());
 }
+
+#[test]
+fn test_multi_key_dep() {
+    // ensure that ignored deps listed in Cargo.toml package.metadata.cargo-machete.ignored are
+    // correctly ignored.
+    check_analysis("./integration-tests/multi-key-dep/Cargo.toml", |analysis| {
+        assert_eq!(analysis.unused, &["cc".to_string()]);
+    });
+}

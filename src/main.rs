@@ -7,6 +7,7 @@ use std::collections::HashSet;
 use std::path::Path;
 use std::str::FromStr;
 use std::{borrow::Cow, fs, path::PathBuf};
+use toml_edit::{DocumentMut, KeyMut, TableLike};
 
 #[derive(Clone, Copy)]
 pub(crate) enum UseCargoMetadata {
@@ -289,34 +290,54 @@ fn dep_name_superset(dep_names: &[String]) -> HashSet<String> {
 //         .as_table_mut()
 //         .context("unexpected missing table, please report with a test case on https://github.com/bnjbvr/cargo-machete")?;
 
-fn remove_dependencies(manifest: &str, dependency_list: &[String]) -> anyhow::Result<String> {
-    let mut manifest = toml_edit::Document::from_str(manifest)?;
-    let missing_table_msg = "unexpected missing table, please report with a test case on https://github.com/bnjbvr/cargo-machete";
-    let valid_tables = HashSet::from(["dependencies", "build-dependencies", "dev-dependencies"]);
-    let dependency_superset = dep_name_superset(dependency_list);
+fn get_table_deps<'a>(
+    kv_iter: toml_edit::IterMut<'a>,
+    top_level: bool,
+) -> anyhow::Result<Vec<(KeyMut<'a>, &'a mut dyn TableLike)>> {
+    let mut matched_tables = Vec::new();
+    for (k, v) in kv_iter {
+        match k.get() {
+            "dependencies" | "build-dependencies" | "dev-dependencies" => {
+                let table = v.as_table_like_mut().context(k.to_string())?;
+                matched_tables.push((k, table));
+            }
+            // handle dependency tables inside target triples,
+            // ex: `target.'cfg(unix)'.dependencies`
+            // https://doc.rust-lang.org/cargo/reference/config.html#configuration-format
+            "target" if top_level => {
+                let target_table = v.as_table_like_mut().context("target")?;
+                for (_, triple_table) in target_table
+                    .iter_mut()
+                    .filter(|(k, _)| k.starts_with("cfg("))
+                {
+                    if let Some(t) = triple_table.as_table_like_mut() {
+                        let mut triple_deps = get_table_deps(t.iter_mut(), false)?;
+                        matched_tables.append(&mut triple_deps);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(matched_tables)
+}
 
-    let mut dep_tables = manifest
-        .iter_mut()
-        // select for items that are tables with valid names
-        .filter(|(k, v)| v.is_table_like() && valid_tables.contains(k.display_repr().as_ref()))
-        .map(|(k, v)| {
-            let table = v.as_table_like_mut().context(missing_table_msg)?;
-            Ok((k, table))
-        })
-        .filter(|v| match v {
-            Ok((_, table)) if dependency_superset.iter().any(|k| table.contains_key(k)) => true,
-            Err(_) => true,
-            Ok(_) => false,
-        })
-        .collect::<Result<Vec<(KeyMut, &mut dyn TableLike)>, anyhow::Error>>()?;
+fn remove_dependencies(manifest: &str, dependency_list: &[String]) -> anyhow::Result<String> {
+    dbg!(&dependency_list);
+    let mut manifest = toml_edit::DocumentMut::from_str(manifest)?;
+    let missing_table_msg = "unexpected missing table, please report with a test case on https://github.com/bnjbvr/cargo-machete";
+    let dependency_list = dependency_list;
+
+    let dep_table_names = ["dependencies", "build-dependencies", "dev-dependencies"];
+    let mut matched_tables = get_table_deps(manifest.iter_mut(), true)?;
 
     for dep in dependency_list {
         // for now
         let mut removed_one = false;
-        for (name, table) in &mut dep_tables {
+        for (name, table) in &mut matched_tables {
             if table
                 .remove(dep)
-                .or_else(|| table.remove(dep.replace('_', "-").as_str()))
+                // .or_else(|| table.remove(dep.replace('_', "-").as_str()))
                 .is_some()
             {
                 removed_one = true;
@@ -326,7 +347,7 @@ fn remove_dependencies(manifest: &str, dependency_list: &[String]) -> anyhow::Re
             }
         }
         if !removed_one {
-            let tables = dep_tables
+            let tables = matched_tables
                 .iter()
                 .map(|(k, _)| format!("{k}"))
                 .collect::<Vec<String>>()
