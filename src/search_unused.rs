@@ -973,9 +973,12 @@ fn test_workspace_from_relative_path() {
 
 #[test]
 fn test_multi_key_dep() {
-    // ensure that ignored deps listed in Cargo.toml package.metadata.cargo-machete.ignored are
-    // correctly ignored.
-    check_analysis("./integration-tests/multi-key-dep/Cargo.toml", |analysis| {
-        assert_eq!(analysis.unused, &["cc".to_string()]);
-    });
+    let analysis = find_unused(
+        &PathBuf::from(TOP_LEVEL).join("./integration-tests/multi-key-dep/Cargo.toml"),
+        UseCargoMetadata::Yes,
+    )
+    .expect("find_unused must return an Ok result")
+    .expect("no error during processing");
+
+    assert_eq!(analysis.unused, &["cc".to_string(), "rand".to_string()]);
 }

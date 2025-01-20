@@ -3,11 +3,10 @@ mod search_unused;
 use crate::search_unused::find_unused;
 use anyhow::{anyhow, bail, Context};
 use rayon::prelude::*;
-use std::collections::HashSet;
 use std::path::Path;
 use std::str::FromStr;
 use std::{borrow::Cow, fs, path::PathBuf};
-use toml_edit::{DocumentMut, KeyMut, TableLike};
+use toml_edit::{KeyMut, TableLike};
 
 #[derive(Clone, Copy)]
 pub(crate) enum UseCargoMetadata {
@@ -270,26 +269,6 @@ fn run_machete() -> anyhow::Result<bool> {
     Ok(has_unused_dependencies)
 }
 
-// handle a superset of all dependency name dashed/underscored variants: re'\w[-_]'
-fn dep_name_superset(dep_names: &[String]) -> HashSet<String> {
-    let mut unused: HashSet<String> = dep_names.iter().cloned().collect();
-    for dep in unused.clone() {
-        unused.insert(dep.replace('-', "_"));
-        unused.insert(dep.replace('_', "-"));
-    }
-    unused
-}
-
-// fn remove_dependencies(manifest: &str, dependencies_list: &[String]) -> anyhow::Result<String> {
-//     let mut manifest = toml_edit::DocumentMut::from_str(manifest)?;
-//     let dependencies = manifest
-//         .iter_mut()
-//         .find_map(|(k, v)| (v.is_table_like() && k == "dependencies").then_some(Some(v)))
-//         .flatten()
-//         .context("dependencies table is missing or empty")?
-//         .as_table_mut()
-//         .context("unexpected missing table, please report with a test case on https://github.com/bnjbvr/cargo-machete")?;
-
 fn get_table_deps<'a>(
     kv_iter: toml_edit::IterMut<'a>,
     top_level: bool,
@@ -323,12 +302,8 @@ fn get_table_deps<'a>(
 }
 
 fn remove_dependencies(manifest: &str, dependency_list: &[String]) -> anyhow::Result<String> {
-    dbg!(&dependency_list);
     let mut manifest = toml_edit::DocumentMut::from_str(manifest)?;
-    let missing_table_msg = "unexpected missing table, please report with a test case on https://github.com/bnjbvr/cargo-machete";
-    let dependency_list = dependency_list;
 
-    let dep_table_names = ["dependencies", "build-dependencies", "dev-dependencies"];
     let mut matched_tables = get_table_deps(manifest.iter_mut(), true)?;
 
     for dep in dependency_list {
@@ -352,7 +327,7 @@ fn remove_dependencies(manifest: &str, dependency_list: &[String]) -> anyhow::Re
                 .map(|(k, _)| format!("{k}"))
                 .collect::<Vec<String>>()
                 .join(", ");
-            bail!(anyhow!("{dep} not found").context(format!("tables: {tables}")));
+            bail!(anyhow!("{dep} not found in tables:\n\t{tables}"));
         }
     }
 
@@ -407,4 +382,31 @@ fn test_ignore_target() {
         },
     );
     assert!(!entries.unwrap().is_empty());
+}
+
+#[test]
+fn test_remove_dependencies() {
+    let manifest = PathBuf::from(TOP_LEVEL).join("./integration-tests/multi-key-dep/Cargo.toml");
+    let stripped_manifest = remove_dependencies(
+        &std::fs::read_to_string(manifest).unwrap(),
+        &["cc".to_string(), "log-once".to_string(), "rand".to_string()],
+    )
+    .unwrap();
+    assert_eq!(
+        stripped_manifest,
+        r#"[package]
+name = "multi-key-dep"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+log = "0.4.14"
+
+[target.'cfg(unix)'.dependencies]
+
+[dev-dependencies]
+
+[build-dependencies]
+"#
+    );
 }
