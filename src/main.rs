@@ -269,10 +269,11 @@ fn run_machete() -> anyhow::Result<bool> {
     Ok(has_unused_dependencies)
 }
 
-fn get_table_deps<'a>(
-    kv_iter: toml_edit::IterMut<'a>,
+// returns dependency tables from top level and target sources
+fn get_table_deps(
+    kv_iter: toml_edit::IterMut<'_>,
     top_level: bool,
-) -> anyhow::Result<Vec<(KeyMut<'a>, &'a mut dyn TableLike)>> {
+) -> anyhow::Result<Vec<(KeyMut<'_>, &mut dyn TableLike)>> {
     let mut matched_tables = Vec::new();
     for (k, v) in kv_iter {
         match k.get() {
@@ -307,14 +308,9 @@ fn remove_dependencies(manifest: &str, dependency_list: &[String]) -> anyhow::Re
     let mut matched_tables = get_table_deps(manifest.iter_mut(), true)?;
 
     for dep in dependency_list {
-        // for now
         let mut removed_one = false;
         for (name, table) in &mut matched_tables {
-            if table
-                .remove(dep)
-                // .or_else(|| table.remove(dep.replace('_', "-").as_str()))
-                .is_some()
-            {
+            if table.remove(dep).is_some() {
                 removed_one = true;
                 log::debug!("removed {name}.{dep}");
             } else {

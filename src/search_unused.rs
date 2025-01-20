@@ -958,7 +958,7 @@ fn test_workspace_from_relative_path() {
     .unwrap();
 
     let path = Path::new("./Cargo.toml");
-    let analysis = find_unused(&path, UseCargoMetadata::No);
+    let analysis = find_unused(path, UseCargoMetadata::No);
 
     // Reset the current directory *before* running any other check.
     set_current_dir(prev_cwd).unwrap();
