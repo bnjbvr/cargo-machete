@@ -270,7 +270,7 @@ fn run_machete() -> anyhow::Result<bool> {
 }
 
 // returns dependency tables from top level and target sources
-fn get_table_deps(
+fn get_dependency_tables(
     kv_iter: toml_edit::IterMut<'_>,
     top_level: bool,
 ) -> anyhow::Result<Vec<(KeyMut<'_>, &mut dyn TableLike)>> {
@@ -291,7 +291,7 @@ fn get_table_deps(
                     .filter(|(k, _)| k.starts_with("cfg("))
                 {
                     if let Some(t) = triple_table.as_table_like_mut() {
-                        let mut triple_deps = get_table_deps(t.iter_mut(), false)?;
+                        let mut triple_deps = get_dependency_tables(t.iter_mut(), false)?;
                         matched_tables.append(&mut triple_deps);
                     }
                 }
@@ -305,7 +305,7 @@ fn get_table_deps(
 fn remove_dependencies(manifest: &str, dependency_list: &[String]) -> anyhow::Result<String> {
     let mut manifest = toml_edit::DocumentMut::from_str(manifest)?;
 
-    let mut matched_tables = get_table_deps(manifest.iter_mut(), true)?;
+    let mut matched_tables = get_dependency_tables(manifest.iter_mut(), true)?;
 
     for dep in dependency_list {
         let mut removed_one = false;
@@ -320,7 +320,7 @@ fn remove_dependencies(manifest: &str, dependency_list: &[String]) -> anyhow::Re
         if !removed_one {
             let tables = matched_tables
                 .iter()
-                .map(|(k, _)| format!("{k}"))
+                .map(|(k, _)| k.to_string())
                 .collect::<Vec<String>>()
                 .join(", ");
             bail!(anyhow!("{dep} not found in tables:\n\t{tables}"));
@@ -336,7 +336,7 @@ fn main() {
         Ok(false) => 0,
         Ok(true) => 1,
         Err(err) => {
-            eprintln!("Error: {err:?}");
+            eprintln!("Error: {err}");
             2
         }
     };
