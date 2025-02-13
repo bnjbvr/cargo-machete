@@ -1,0 +1,11 @@
+[workspace]
+members = ["./inner"]
+
+[workspace.dependencies]
+rustls-webpki = "0.102.8"
+bytes = "1.10.0"
+flagset = "0.4.6"
+
+[workspace.metadata.cargo-machete.renamed]
+rustls-webpki = "webpki" # no errors, used
+bytes = "u8s"            # bad rename should error

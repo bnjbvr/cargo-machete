@@ -1,0 +1,19 @@
+[package]
+name = "ignored-dep"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+log = "0.4.14"            # unused
+rustls-webpki = "0.102.8"
+bytes = "1.10.0"
+flagset = "0.4.6"
+
+[package.metadata.cargo-machete]
+ignored = ["flagset"] # ignored still works
+
+[package.metadata.cargo-machete.renamed]
+rustls-webpki = "webpki" # no errors, used
+bytes = "u8s"            # bad rename should error
