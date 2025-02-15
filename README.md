@@ -79,6 +79,31 @@ flag, which will call `cargo metadata --all-features` to find final dependency
 names, more accurate dependencies per build type, etc. ⚠ This may modify the
 `Cargo.lock` files in your projects.
 
+### Renamed crates
+
+Some crates have a different import name, than their dependency name (e.g.
+`rustls-webpki`). This triggers false positives in `cargo-machete` when used
+without the `--with-metadata` flag. To fix this you can manually rename a crate
+for `cargo-machete`:
+
+For example:
+
+```toml
+[dependencies]
+rustls-webpki = "0.102"
+
+# in an individual package Cargo.toml
+[package.metadata.cargo-machete.renamed]
+rustls-webpki = "webpki"
+
+# in a workspace Cargo.toml
+[workspace.metadata.cargo-machete.renamed]
+rustls-webpki = "webpki"
+```
+
+This ensures that if `rustls-webpki` is no longer used in the project,
+`cargo-machete` will be able to detect it (unlike with the `ignored` table).
+
 ## Docker Image
 
 A docker image for cargo machete.

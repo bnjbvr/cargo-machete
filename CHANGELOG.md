@@ -1,3 +1,7 @@
+# unreleased
+
+- Improved: add `renamed` table to track renamed crates (#152 #153).
+
 # 0.7.0 (released on 2024-09-25)
 
 - Breaking change: Don't search in ignored files (those specified in .ignore/.gitignore) by default. It's possible to use `--no-ignore` to search in these directories by default (#137).
