@@ -5,6 +5,7 @@ use grep::{
     searcher::{self, BinaryDetection, Searcher, SearcherBuilder, Sink},
 };
 use log::{debug, trace, warn};
+use meta::MetadataFields;
 use rayon::prelude::*;
 use std::{
     collections::{BTreeMap, HashSet},
@@ -20,6 +21,8 @@ use crate::UseCargoMetadata;
 use self::meta::PackageMetadata;
 
 mod meta {
+    use std::collections::BTreeMap;
+
     use serde::{Deserialize, Serialize};
 
     #[derive(Serialize, Deserialize)]
@@ -28,11 +31,19 @@ mod meta {
         pub cargo_machete: Option<MetadataFields>,
     }
 
-    #[derive(Serialize, Deserialize)]
+    #[derive(Clone, Serialize, Deserialize)]
     pub struct MetadataFields {
         /// Crates triggering false positives in `cargo-machete`, which should not be reported as
         /// unused.
+        #[serde(default)]
         pub ignored: Vec<String>,
+
+        /// Crates whose name is different than the name in the Cargo.toml.
+        ///
+        /// Some crates have a different lib name (the name in `use` statements) that their package
+        /// name (e.g. `rustls-webpki` is imported with `use webpki;`).
+        #[serde(default)]
+        pub renamed: BTreeMap<Box<str>, Box<str>>,
     }
 }
 
@@ -288,7 +299,7 @@ impl Search {
 fn get_full_manifest(
     dir_path: &Path,
     manifest_path: &Path,
-) -> anyhow::Result<(cargo_toml::Manifest<PackageMetadata>, Vec<String>)> {
+) -> anyhow::Result<(cargo_toml::Manifest<PackageMetadata>, meta::MetadataFields)> {
     // HACK: we can't plain use `from_path_with_metadata` here, because it calls
     // `complete_from_path` just a bit too early (before we've had a chance to call
     // `inherit_workspace`). See https://gitlab.com/crates.rs/cargo_toml/-/issues/20 for details,
@@ -298,7 +309,10 @@ fn get_full_manifest(
         cargo_toml::Manifest::<PackageMetadata>::from_slice_with_metadata(&cargo_toml_content)?;
 
     let mut ws_manifest_and_path = None;
-    let mut workspace_ignored = vec![];
+    let mut workspace_metadata = MetadataFields {
+        ignored: vec![],
+        renamed: BTreeMap::new(),
+    };
 
     // Canonicalize the path, so as to get the full "parenthood" of relative paths.
     let mut dir_path = std::fs::canonicalize(dir_path).unwrap_or_else(|err| {
@@ -314,14 +328,13 @@ fn get_full_manifest(
             cargo_toml::Manifest::<PackageMetadata>::from_path_with_metadata(&workspace_cargo_path)
         {
             if let Some(workspace) = &workspace_manifest.workspace {
-                // Look for `workspace.metadata.cargo-machete.ignored` in the workspace Cargo.toml.
-                if let Some(ignored) = workspace
+                // Look for `workspace.metadata.cargo-machete` in the workspace Cargo.toml.
+                if let Some(metadata) = workspace
                     .metadata
                     .as_ref()
                     .and_then(|metadata| metadata.cargo_machete.as_ref())
-                    .map(|machete| &machete.ignored)
                 {
-                    workspace_ignored.clone_from(ignored);
+                    workspace_metadata.clone_from(metadata);
                 }
 
                 ws_manifest_and_path = Some((workspace_manifest, workspace_cargo_path));
@@ -335,7 +348,7 @@ fn get_full_manifest(
         ws_manifest_and_path.as_ref().map(|(m, p)| (m, p.as_path())),
     )?;
 
-    Ok((manifest, workspace_ignored))
+    Ok((manifest, workspace_metadata))
 }
 
 pub(crate) fn find_unused(
@@ -347,7 +360,7 @@ pub(crate) fn find_unused(
 
     trace!("trying to open {}...", manifest_path.display());
 
-    let (manifest, workspace_ignored) = get_full_manifest(&dir_path, manifest_path)?;
+    let (manifest, mut workspace_metadata) = get_full_manifest(&dir_path, manifest_path)?;
 
     let package_name = match manifest.package {
         Some(ref package) => package.name.clone(),
@@ -440,17 +453,25 @@ pub(crate) fn find_unused(
             .collect()
     };
 
-    // Keep a side-list of ignored dependencies (likely false positives).
-    let ignored = analysis
+    let meta = analysis
         .manifest
         .package
         .as_ref()
         .and_then(|package| package.metadata.as_ref())
-        .and_then(|meta| meta.cargo_machete.as_ref())
+        .and_then(|meta| meta.cargo_machete.as_ref());
+
+    // Keep a side-list of ignored dependencies (likely false positives).
+    let ignored = meta
         .map(|meta| meta.ignored.iter().collect::<HashSet<_>>())
         .unwrap_or_default();
 
-    let workspace_ignored: HashSet<_> = workspace_ignored.into_iter().collect();
+    // Keep a list of renamed dependencies
+    static NO_RENAMED: BTreeMap<Box<str>, Box<str>> = BTreeMap::new();
+    let renamed = meta.map(|meta| &meta.renamed).unwrap_or(&NO_RENAMED);
+
+    let workspace_ignored: HashSet<_> = std::mem::take(&mut workspace_metadata.ignored)
+        .into_iter()
+        .collect();
 
     enum SingleDepResult {
         /// Dependency is unused and not marked as ignored.
@@ -462,7 +483,14 @@ pub(crate) fn find_unused(
     let results: Vec<SingleDepResult> = dependencies
         .into_par_iter()
         .filter_map(|(dep_name, crate_name)| {
-            let mut search = Search::new(&crate_name).expect("constructing grep context");
+            // If the crate was renamed, use the renamed name.
+            let crate_name = renamed
+                .get(dep_name.as_str())
+                .or_else(|| workspace_metadata.renamed.get(dep_name.as_str()))
+                .map(Box::as_ref)
+                .unwrap_or(crate_name.as_str());
+
+            let mut search = Search::new(crate_name).expect("constructing grep context");
 
             let mut found_once = false;
             for path in &paths {
@@ -857,6 +885,33 @@ fn test_with_bench() {
             assert!(analysis.unused.is_empty());
         },
     );
+}
+
+#[test]
+fn test_renamed_field_works() -> anyhow::Result<()> {
+    // when a lib like xml-rs is exposed with a different name, cargo-machete doesn't return false
+    // positives.
+    let analysis = find_unused(
+        &PathBuf::from(TOP_LEVEL).join("./integration-tests/renamed-dep/Cargo.toml"),
+        UseCargoMetadata::No,
+    )?
+    .expect("no error during processing");
+    assert_eq!(analysis.unused.as_slice(), &["bytes", "log"]);
+    Ok(())
+}
+
+#[test]
+fn test_renamed_field_workspace_works() -> anyhow::Result<()> {
+    // when a lib like xml-rs is exposed with a different name, cargo-machete doesn't return false
+    // positives.
+    let analysis = find_unused(
+        &PathBuf::from(TOP_LEVEL)
+            .join("./integration-tests/renamed-dep-workspace/inner/Cargo.toml"),
+        UseCargoMetadata::No,
+    )?
+    .expect("no error during processing");
+    assert_eq!(analysis.unused.as_slice(), &["bytes", "flagset"]);
+    Ok(())
 }
 
 #[test]
