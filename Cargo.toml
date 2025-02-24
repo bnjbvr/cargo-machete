@@ -1,6 +1,6 @@
 [package]
 name = "cargo-machete"
-edition = "2021"
+edition = "2024"
 version = "0.7.0"
 description = "Find unused dependencies with this one weird trick!"
 authors = ["Benjamin Bouvier <public@benj.me>"]
