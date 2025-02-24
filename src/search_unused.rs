@@ -13,9 +13,9 @@ use std::{
 };
 use walkdir::WalkDir;
 
-use crate::UseCargoMetadata;
 #[cfg(test)]
 use crate::TOP_LEVEL;
+use crate::UseCargoMetadata;
 
 use self::meta::PackageMetadata;
 
