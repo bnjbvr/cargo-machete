@@ -23,11 +23,6 @@ jobs:
     steps:
       - uses: actions/checkout@v3
 
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: ${{ matrix.rust }}
-          components: clippy, rustfmt
-
       - uses: Swatinem/rust-cache@v2
 
       - run: cargo fmt --all --check
@@ -84,7 +79,6 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
 
-
   # Code mutably borrowed from https://github.com/EmbarkStudios/cargo-deny/, thanks Embark!
   release:
     name: Release
@@ -110,11 +104,6 @@ jobs:
             bin: cargo-machete
     runs-on: ${{ matrix.os }}
     steps:
-      - name: Install stable toolchain
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: ${{ matrix.rust }}
-          target: ${{ matrix.target }}
       - name: Install musl tools
         if: matrix.os == 'ubuntu-22.04'
         run: |
