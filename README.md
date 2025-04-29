@@ -118,6 +118,19 @@ jobs:
         uses: bnjbvr/cargo-machete@main
 ```
 
+## `pre-commit` Hooks
+
+`cargo machete` can be used as a [`pre-commit`](https://pre-commit.com/) hook to check for unused dependencies before committing changes.
+
+Add the following to your `.pre-commit-config.yaml`:
+
+```yaml
+- repo: https://github.com/bnjbvr/cargo-machete
+  rev: main  # or a specific tag/commit
+  hooks:
+    - id: cargo-machete
+```
+
 ## Contributing
 
 [![Contributor Covenant](https://img.shields.io/badge/contributor%20covenant-v1.4-ff69b4.svg)](https://www.contributor-covenant.org/version/1/4/code-of-conduct/)
