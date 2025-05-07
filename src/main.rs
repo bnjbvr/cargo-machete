@@ -1,11 +1,12 @@
 mod search_unused;
 
 use crate::search_unused::find_unused;
-use anyhow::Context;
+use anyhow::{Context, bail};
 use rayon::prelude::*;
 use std::path::Path;
 use std::str::FromStr;
 use std::{borrow::Cow, fs, path::PathBuf};
+use toml_edit::{KeyMut, TableLike};
 
 #[derive(Clone, Copy)]
 pub(crate) enum UseCargoMetadata {
@@ -15,8 +16,8 @@ pub(crate) enum UseCargoMetadata {
 
 #[cfg(test)]
 impl UseCargoMetadata {
-    fn all() -> &'static [UseCargoMetadata] {
-        &[UseCargoMetadata::Yes, UseCargoMetadata::No]
+    fn all() -> &'static [Self] {
+        &[Self::Yes, Self::No]
     }
 }
 
@@ -268,20 +269,62 @@ fn run_machete() -> anyhow::Result<bool> {
     Ok(has_unused_dependencies)
 }
 
-fn remove_dependencies(manifest: &str, dependencies_list: &[String]) -> anyhow::Result<String> {
-    let mut manifest = toml_edit::DocumentMut::from_str(manifest)?;
-    let dependencies = manifest
-        .iter_mut()
-        .find_map(|(k, v)| (v.is_table_like() && k == "dependencies").then_some(Some(v)))
-        .flatten()
-        .context("dependencies table is missing or empty")?
-        .as_table_mut()
-        .context("unexpected missing table, please report with a test case on https://github.com/bnjbvr/cargo-machete")?;
+/// Returns dependency tables from top level and target sources.
+fn get_dependency_tables(
+    kv_iter: toml_edit::IterMut<'_>,
+    top_level: bool,
+) -> anyhow::Result<Vec<(KeyMut<'_>, &mut dyn TableLike)>> {
+    let mut matched_tables = Vec::new();
+    for (k, v) in kv_iter {
+        match k.get() {
+            "dependencies" | "build-dependencies" | "dev-dependencies" => {
+                let table = v.as_table_like_mut().context(k.to_string())?;
+                matched_tables.push((k, table));
+            }
+            // handle dependency tables inside target triples,
+            // ex: `target.'cfg(unix)'.dependencies`
+            // https://doc.rust-lang.org/cargo/reference/config.html#configuration-format
+            "target" if top_level => {
+                let target_table = v.as_table_like_mut().context("target")?;
+                for (_, triple_table) in target_table
+                    .iter_mut()
+                    .filter(|(k, _)| k.starts_with("cfg("))
+                {
+                    if let Some(t) = triple_table.as_table_like_mut() {
+                        let mut triple_deps = get_dependency_tables(t.iter_mut(), false)?;
+                        matched_tables.append(&mut triple_deps);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(matched_tables)
+}
 
-    for k in dependencies_list {
-        dependencies
-            .remove(k)
-            .with_context(|| format!("Dependency {k} not found"))?;
+fn remove_dependencies(manifest: &str, dependency_list: &[String]) -> anyhow::Result<String> {
+    let mut manifest = toml_edit::DocumentMut::from_str(manifest)?;
+
+    let mut matched_tables = get_dependency_tables(manifest.iter_mut(), true)?;
+
+    for dep in dependency_list {
+        let mut removed_one = false;
+        for (name, table) in &mut matched_tables {
+            if table.remove(dep).is_some() {
+                removed_one = true;
+                log::debug!("removed {name}.{dep}");
+            } else {
+                log::trace!("no match for {name}.{dep}");
+            }
+        }
+        if !removed_one {
+            let tables = matched_tables
+                .iter()
+                .map(|(k, _)| k.to_string())
+                .collect::<Vec<String>>()
+                .join(", ");
+            bail!("{dep} not found in tables:\n\t{tables}");
+        }
     }
 
     let serialized = manifest.to_string();
@@ -335,4 +378,31 @@ fn test_ignore_target() {
         },
     );
     assert!(!entries.unwrap().is_empty());
+}
+
+#[test]
+fn test_remove_dependencies() {
+    let manifest = PathBuf::from(TOP_LEVEL).join("./integration-tests/multi-key-dep/Cargo.toml");
+    let stripped_manifest = remove_dependencies(
+        &std::fs::read_to_string(manifest).unwrap(),
+        &["cc".to_string(), "log-once".to_string(), "rand".to_string()],
+    )
+    .unwrap();
+    assert_eq!(
+        stripped_manifest,
+        r#"[package]
+name = "multi-key-dep"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+log = "0.4.14"
+
+[target.'cfg(unix)'.dependencies]
+
+[dev-dependencies]
+
+[build-dependencies]
+"#
+    );
 }
