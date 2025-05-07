@@ -342,9 +342,7 @@ fn get_full_manifest(
         manifest,
         // Look for `workspace.metadata.cargo-machete` custom metadata in the workspace Cargo.toml.
         ws_manifest_and_path
-            .and_then(|(manifest, _path)| manifest.workspace)
-            .and_then(|workspace| workspace.metadata)
-            .and_then(|metadata| metadata.cargo_machete),
+            .and_then(|(manifest, _path)| manifest.workspace?.metadata?.cargo_machete),
     ))
 }
 
@@ -454,8 +452,7 @@ pub(crate) fn find_unused(
         .manifest
         .package
         .as_ref()
-        .and_then(|package| package.metadata.as_ref())
-        .and_then(|meta| meta.cargo_machete.as_ref());
+        .and_then(|package| package.metadata.as_ref()?.cargo_machete.as_ref());
 
     // Keep a side-list of ignored dependencies (likely false positives).
     let ignored = meta
