@@ -1,0 +1,9 @@
+- id: cargo-machete
+  name: cargo-machete
+  description: Run cargo machete to find unused Rust dependencies
+  language: rust
+  entry: cargo machete
+  types_or:
+    - cargo
+    - cargo-lock
+  pass_filenames: false
