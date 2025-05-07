@@ -269,7 +269,7 @@ fn run_machete() -> anyhow::Result<bool> {
     Ok(has_unused_dependencies)
 }
 
-// returns dependency tables from top level and target sources
+/// Returns dependency tables from top level and target sources.
 fn get_dependency_tables(
     kv_iter: toml_edit::IterMut<'_>,
     top_level: bool,
@@ -323,7 +323,7 @@ fn remove_dependencies(manifest: &str, dependency_list: &[String]) -> anyhow::Re
                 .map(|(k, _)| k.to_string())
                 .collect::<Vec<String>>()
                 .join(", ");
-            bail!(anyhow!("{dep} not found in tables:\n\t{tables}"));
+            bail!("{dep} not found in tables:\n\t{tables}");
         }
     }
 
