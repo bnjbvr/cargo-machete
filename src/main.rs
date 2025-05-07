@@ -1,7 +1,7 @@
 mod search_unused;
 
 use crate::search_unused::find_unused;
-use anyhow::{anyhow, bail, Context};
+use anyhow::{bail, Context};
 use rayon::prelude::*;
 use std::path::Path;
 use std::str::FromStr;
