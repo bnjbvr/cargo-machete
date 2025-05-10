@@ -134,7 +134,7 @@ on:
   pull_request: { branches: "*" }
 
 jobs:
-  build:
+  detect-unused-dependencies:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
