@@ -53,6 +53,14 @@ The **return code** gives an indication whether unused dependencies have been fo
 
 This can be used in CI situations.
 
+### Available Options
+
+- `--include-dev-deps`: Also check dev-dependencies in addition to regular dependencies. By default, only regular dependencies are checked.
+- `--with-metadata`: Call `cargo metadata --all-features` to find final dependency names, more accurate dependencies per build type, etc. This may modify the `Cargo.lock` files in your projects.
+- `--skip-target-dir`: Don't analyze anything contained in any target/ directories encountered.
+- `--fix`: Rewrite the Cargo.toml files to automatically remove unused dependencies.
+- `--no-ignore`: Also search in ignored files (.gitignore, .ignore, etc.) when searching for files.
+
 ### False positives
 
 To ignore a certain set of dependencies in a crate, add

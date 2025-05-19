@@ -1,0 +1,15 @@
+[package]
+name = "dev-dependencies"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+log = "0.4.14"
+rand = "0.8.5" # In dev-dependency list but actually used in test.
+
+[dev-dependencies]
+log-once = "0.3.1" # Used in test folder
+tracing = "0.1.41" # Used in src folder test.
+bytes = "1.10.0" # Not used

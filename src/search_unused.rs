@@ -16,7 +16,7 @@ use walkdir::WalkDir;
 
 #[cfg(test)]
 use crate::TOP_LEVEL;
-use crate::UseCargoMetadata;
+use crate::{IncludeDevDependencies, UseCargoMetadata};
 
 use self::meta::PackageMetadata;
 
@@ -349,6 +349,7 @@ fn get_full_manifest(
 pub(crate) fn find_unused(
     manifest_path: &Path,
     with_cargo_metadata: UseCargoMetadata,
+    include_dev_deps: IncludeDevDependencies,
 ) -> anyhow::Result<Option<PackageAnalysis>> {
     let mut dir_path = manifest_path.to_path_buf();
     dir_path.pop();
@@ -401,30 +402,33 @@ pub(crate) fn find_unused(
             // look it up in the package list to find the name (the one in registries)
             // look up that name in dependencies of the root_package;
             // find if it uses a different key through the rename field
-            root_node
-                .deps
-                .iter()
-                .map(|dep| {
-                    let crate_name = dep.name.clone();
-                    let dep_pkg = metadata
-                        .packages
-                        .iter()
-                        .find(|pkg| pkg.id == dep.pkg)
-                        .expect(
-                            "resolved dependencies should appear under cargo-metadata packages",
-                        );
+            // Start with an empty map
+            let mut deps = BTreeMap::new();
 
-                    let mut dep_spec_it = root_package
-                        .dependencies
-                        .iter()
-                        .filter(|dep_spec| dep_spec.name == dep_pkg.name);
+            // First collect all dependencies from resolved nodes
+            for dep in &root_node.deps {
+                let crate_name = dep.name.clone();
+                let dep_pkg = metadata
+                    .packages
+                    .iter()
+                    .find(|pkg| pkg.id == dep.pkg)
+                    .expect("resolved dependencies should appear under cargo-metadata packages");
 
-                    // The dependency can appear more than once, for example if it is both
-                    // a dependency and a dev-dependency (often with more features enabled).
-                    // We'll assume cargo enforces consistency.
-                    let dep_spec = dep_spec_it
-                        .next()
-                        .expect("resolved dependency should have a matching dependency spec");
+                let mut dep_spec_it = root_package
+                    .dependencies
+                    .iter()
+                    .filter(|dep_spec| dep_spec.name == dep_pkg.name);
+
+                // The dependency can appear more than once, for example if it is both
+                // a dependency and a dev-dependency (often with more features enabled).
+                // We'll assume cargo enforces consistency.
+                if let Some(dep_spec) = dep_spec_it.next() {
+                    // Skip dev-dependencies if the flag isn't set
+                    if include_dev_deps == IncludeDevDependencies::No
+                        && dep_spec.kind == cargo_metadata::DependencyKind::Development
+                    {
+                        continue;
+                    }
 
                     // If the dependency was renamed, through key = { package = … },
                     // the original key is in dep_spec.rename.
@@ -432,20 +436,38 @@ pub(crate) fn find_unused(
                         .rename
                         .clone()
                         .unwrap_or_else(|| dep_spec.name.clone());
-                    (dep_key, crate_name)
-                })
-                .collect()
+
+                    deps.insert(dep_key, crate_name);
+                } else {
+                    eprintln!(
+                        "Warning: Could not find dependency spec for {}",
+                        dep_pkg.name
+                    );
+                }
+            }
+
+            deps
         } else {
             // No root -> virtual workspace, empty map
             Default::default()
         }
     } else {
-        analysis
-            .manifest
-            .dependencies
-            .keys()
-            .map(|k| (k.clone(), k.replace('-', "_")))
-            .collect()
+        // When not using cargo-metadata, we simply collect dependencies from the manifest
+        let mut deps = BTreeMap::new();
+
+        // Always include normal dependencies
+        for k in analysis.manifest.dependencies.keys() {
+            deps.insert(k.clone(), k.replace('-', "_"));
+        }
+
+        // Include dev-dependencies only if the flag is set
+        if include_dev_deps == IncludeDevDependencies::Yes {
+            for k in analysis.manifest.dev_dependencies.keys() {
+                deps.insert(k.clone(), k.replace('-', "_"));
+            }
+        }
+
+        deps
     };
 
     let meta = analysis
@@ -805,6 +827,7 @@ fn check_analysis<F: Fn(PackageAnalysis)>(rel_path: &str, callback: F) {
         let analysis = find_unused(
             &PathBuf::from(TOP_LEVEL).join(rel_path),
             *use_cargo_metadata,
+            IncludeDevDependencies::No,
         )
         .expect("find_unused must return an Ok result")
         .expect("no error during processing");
@@ -889,6 +912,7 @@ fn test_renamed_field_works() -> anyhow::Result<()> {
     let analysis = find_unused(
         &PathBuf::from(TOP_LEVEL).join("./integration-tests/renamed-dep/Cargo.toml"),
         UseCargoMetadata::No,
+        IncludeDevDependencies::No,
     )?
     .expect("no error during processing");
     assert_eq!(analysis.unused.as_slice(), &["bytes", "log"]);
@@ -903,6 +927,7 @@ fn test_renamed_field_workspace_works() -> anyhow::Result<()> {
         &PathBuf::from(TOP_LEVEL)
             .join("./integration-tests/renamed-dep-workspace/inner/Cargo.toml"),
         UseCargoMetadata::No,
+        IncludeDevDependencies::No,
     )?
     .expect("no error during processing");
     assert_eq!(analysis.unused.as_slice(), &["bytes", "flagset"]);
@@ -916,6 +941,7 @@ fn test_crate_renaming_works() -> anyhow::Result<()> {
     let analysis = find_unused(
         &PathBuf::from(TOP_LEVEL).join("./integration-tests/renaming-works/Cargo.toml"),
         UseCargoMetadata::Yes,
+        IncludeDevDependencies::No,
     )?
     .expect("no error during processing");
     assert!(analysis.unused.is_empty());
@@ -924,6 +950,7 @@ fn test_crate_renaming_works() -> anyhow::Result<()> {
     let analysis = find_unused(
         &PathBuf::from(TOP_LEVEL).join("./integration-tests/renaming-works/Cargo.toml"),
         UseCargoMetadata::No,
+        IncludeDevDependencies::No,
     )?
     .expect("no error during processing");
     assert_eq!(analysis.unused, &["xml-rs".to_string()]);
@@ -938,6 +965,7 @@ fn test_unused_renamed_in_registry() -> anyhow::Result<()> {
     let analysis = find_unused(
         &PathBuf::from(TOP_LEVEL).join("./integration-tests/unused-renamed-in-registry/Cargo.toml"),
         UseCargoMetadata::Yes,
+        IncludeDevDependencies::No,
     )?
     .expect("no error during processing");
     assert_eq!(analysis.unused, &["xml-rs".to_string()]);
@@ -952,6 +980,7 @@ fn test_unused_renamed_in_spec() -> anyhow::Result<()> {
     let analysis = find_unused(
         &PathBuf::from(TOP_LEVEL).join("./integration-tests/unused-renamed-in-spec/Cargo.toml"),
         UseCargoMetadata::Yes,
+        IncludeDevDependencies::No,
     )?
     .expect("no error during processing");
     assert_eq!(analysis.unused, &["tracing".to_string()]);
@@ -965,6 +994,7 @@ fn test_unused_kebab_spec() -> anyhow::Result<()> {
     let analysis = find_unused(
         &PathBuf::from(TOP_LEVEL).join("./integration-tests/unused-kebab-spec/Cargo.toml"),
         UseCargoMetadata::Yes,
+        IncludeDevDependencies::No,
     )?
     .expect("no error during processing");
     assert_eq!(analysis.unused, &["log-once".to_string()]);
@@ -1008,7 +1038,7 @@ fn test_workspace_from_relative_path() {
     .unwrap();
 
     let path = Path::new("./Cargo.toml");
-    let analysis = find_unused(path, UseCargoMetadata::No);
+    let analysis = find_unused(path, UseCargoMetadata::No, IncludeDevDependencies::No);
 
     // Reset the current directory *before* running any other check.
     set_current_dir(prev_cwd).unwrap();
@@ -1026,9 +1056,47 @@ fn test_multi_key_dep() {
     let analysis = find_unused(
         &PathBuf::from(TOP_LEVEL).join("./integration-tests/multi-key-dep/Cargo.toml"),
         UseCargoMetadata::Yes,
+        IncludeDevDependencies::No,
     )
     .expect("find_unused must return an Ok result")
     .expect("no error during processing");
 
     assert_eq!(analysis.unused, &["cc".to_string(), "rand".to_string()]);
+}
+
+#[test]
+fn test_dev_dependencies_excluded() {
+    // This tests whether the dev-dependencies crate works without the flag.
+    for use_cargo_metadata in UseCargoMetadata::all() {
+        let analysis = find_unused(
+            &PathBuf::from(TOP_LEVEL).join("./integration-tests/dev-dependencies/Cargo.toml"),
+            *use_cargo_metadata,
+            IncludeDevDependencies::No,
+        )
+        .expect("find_unused must return an Ok result")
+        .expect("no error during processing");
+
+        // This list is empty. Without the include flag, machete iterates through all crates listed in
+        // the dependencies section, but it goes through ALL files. So rand is not an unused dependency,
+        // even though it should really be under dev-dependencies. Maybe a future improvement?
+        assert!(analysis.unused.is_empty());
+    }
+}
+
+#[test]
+fn test_dev_dependencies_included() {
+    // This tests whether the dev-dependencies crate works without the flag.
+    for use_cargo_metadata in UseCargoMetadata::all() {
+        let analysis = find_unused(
+            &PathBuf::from(TOP_LEVEL).join("./integration-tests/dev-dependencies/Cargo.toml"),
+            *use_cargo_metadata,
+            IncludeDevDependencies::Yes,
+        )
+        .expect("find_unused must return an Ok result")
+        .expect("no error during processing");
+
+        // Bytes is the only crate that is not used. As a future improvement, we can maybe show that
+        // rand should be in the dev-dependencies list.
+        assert_eq!(analysis.unused, &["bytes".to_string()]);
+    }
 }
