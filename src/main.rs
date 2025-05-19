@@ -77,6 +77,10 @@ struct MacheteArgs {
     #[argh(switch)]
     no_ignore: bool,
 
+    /// also check dev-dependencies in addition to regular dependencies.
+    #[argh(switch)]
+    include_dev: bool,
+
     /// print version.
     #[argh(switch)]
     version: bool,
@@ -116,6 +120,13 @@ fn run_machete() -> anyhow::Result<bool> {
     } else {
         argh::from_env()
     };
+
+    if args.with_metadata && args.include_dev {
+        eprintln!(
+            "warning: `--include-dev` has no effect with `--with-metadata`; \
+             `--with-metadata` always checks all dependency tables"
+        );
+    }
 
     let printer: Box<dyn Printer> = if args.json {
         Box::new(JsonPrinter)
@@ -181,8 +192,8 @@ fn run_machete() -> anyhow::Result<bool> {
         // used by any Rust crate.
         let results = manifest_path_entries
             .par_iter()
-            .filter_map(
-                |manifest_path| match find_unused(manifest_path, metadata_cache) {
+            .filter_map(|manifest_path| {
+                match find_unused(manifest_path, metadata_cache, args.include_dev) {
                     Ok(Some(analysis)) => {
                         if analysis.unused.is_empty() {
                             None
@@ -203,8 +214,8 @@ fn run_machete() -> anyhow::Result<bool> {
                         eprintln!("error when handling {}: {:#}", manifest_path.display(), err);
                         None
                     }
-                },
-            )
+                }
+            })
             .collect::<Vec<_>>();
 
         has_unused_dependencies = has_unused_dependencies || !results.is_empty();

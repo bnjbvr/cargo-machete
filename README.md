@@ -53,6 +53,12 @@ The **return code** gives an indication whether unused dependencies have been fo
 
 This can be used in CI situations.
 
+### Checking dev-dependencies
+
+By default, cargo-machete checks regular dependencies only. Pass `--include-dev` to also check
+dev-dependencies. When `--with-metadata` is used, cargo-machete always checks all dependency tables,
+including dev-dependencies.
+
 ### Skipping directories
 
 By default cargo-machete descends into every subdirectory from the given root paths (or `.` if none

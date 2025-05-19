@@ -425,6 +425,7 @@ fn search_dep(
 pub(crate) fn find_unused(
     manifest_path: &Path,
     metadata_cache: Option<&MetadataCache>,
+    include_dev: bool,
 ) -> anyhow::Result<Option<PackageAnalysis>> {
     let mut dir_path = manifest_path.to_path_buf();
     dir_path.pop();
@@ -454,7 +455,7 @@ pub(crate) fn find_unused(
         .and_then(|pkg| pkg.build.as_ref()?.as_path())
         .map(|p| dir_path.join(p));
 
-    // TODO extend to dev dependencies, and be smarter in the grouping of searched paths.
+    // TODO be smarter in the grouping of searched paths.
 
     // Maps dependency name (the name of the key in the Cargo.toml dependency table, can have
     // dashes, not necessarily the name in the crate registry) to crate name (extern crate, snake
@@ -527,12 +528,21 @@ pub(crate) fn find_unused(
             }
             (normal_deps, build_deps)
         } else {
-            let normal_deps = analysis
+            let mut normal_deps: BTreeMap<String, String> = analysis
                 .manifest
                 .dependencies
                 .keys()
                 .map(|k| (k.clone(), k.replace('-', "_")))
                 .collect();
+            if include_dev {
+                normal_deps.extend(
+                    analysis
+                        .manifest
+                        .dev_dependencies
+                        .keys()
+                        .map(|k| (k.clone(), k.replace('-', "_"))),
+                );
+            }
             let build_deps = analysis
                 .manifest
                 .build_dependencies
@@ -903,9 +913,13 @@ pub use {
 fn check_analysis<F: Fn(PackageAnalysis)>(rel_path: &str, callback: F) {
     let cache = MetadataCache::default();
     for metadata_cache in [None, Some(&cache)] {
-        let analysis = find_unused(&PathBuf::from(TOP_LEVEL).join(rel_path), metadata_cache)
-            .expect("find_unused must return an Ok result")
-            .expect("no error during processing");
+        let analysis = find_unused(
+            &PathBuf::from(TOP_LEVEL).join(rel_path),
+            metadata_cache,
+            false,
+        )
+        .expect("find_unused must return an Ok result")
+        .expect("no error during processing");
         callback(analysis);
     }
 }
@@ -987,6 +1001,7 @@ fn test_renamed_field_works() -> anyhow::Result<()> {
     let analysis = find_unused(
         &PathBuf::from(TOP_LEVEL).join("./integration-tests/renamed-dep/Cargo.toml"),
         None,
+        false,
     )?
     .expect("no error during processing");
     assert_eq!(analysis.unused.as_slice(), &["bytes", "log"]);
@@ -1001,6 +1016,7 @@ fn test_renamed_field_workspace_works() -> anyhow::Result<()> {
         &PathBuf::from(TOP_LEVEL)
             .join("./integration-tests/renamed-dep-workspace/inner/Cargo.toml"),
         None,
+        false,
     )?
     .expect("no error during processing");
     assert_eq!(analysis.unused.as_slice(), &["bytes", "flagset"]);
@@ -1014,6 +1030,7 @@ fn test_crate_renaming_works() -> anyhow::Result<()> {
     let analysis = find_unused(
         &PathBuf::from(TOP_LEVEL).join("./integration-tests/renaming-works/Cargo.toml"),
         Some(&MetadataCache::default()),
+        false,
     )?
     .expect("no error during processing");
     assert!(analysis.unused.is_empty());
@@ -1022,6 +1039,7 @@ fn test_crate_renaming_works() -> anyhow::Result<()> {
     let analysis = find_unused(
         &PathBuf::from(TOP_LEVEL).join("./integration-tests/renaming-works/Cargo.toml"),
         None,
+        false,
     )?
     .expect("no error during processing");
     assert_eq!(analysis.unused, &["xml-rs".to_string()]);
@@ -1036,6 +1054,7 @@ fn test_unused_renamed_in_registry() -> anyhow::Result<()> {
     let analysis = find_unused(
         &PathBuf::from(TOP_LEVEL).join("./integration-tests/unused-renamed-in-registry/Cargo.toml"),
         Some(&MetadataCache::default()),
+        false,
     )?
     .expect("no error during processing");
     assert_eq!(analysis.unused, &["xml-rs".to_string()]);
@@ -1050,6 +1069,7 @@ fn test_unused_renamed_in_spec() -> anyhow::Result<()> {
     let analysis = find_unused(
         &PathBuf::from(TOP_LEVEL).join("./integration-tests/unused-renamed-in-spec/Cargo.toml"),
         Some(&MetadataCache::default()),
+        false,
     )?
     .expect("no error during processing");
     assert_eq!(analysis.unused, &["tracing".to_string()]);
@@ -1063,6 +1083,7 @@ fn test_unused_kebab_spec() -> anyhow::Result<()> {
     let analysis = find_unused(
         &PathBuf::from(TOP_LEVEL).join("./integration-tests/unused-kebab-spec/Cargo.toml"),
         Some(&MetadataCache::default()),
+        false,
     )?
     .expect("no error during processing");
     assert_eq!(analysis.unused, &["log-once".to_string()]);
@@ -1106,7 +1127,7 @@ fn test_workspace_from_relative_path() {
     .unwrap();
 
     let path = Path::new("./Cargo.toml");
-    let analysis = find_unused(path, None);
+    let analysis = find_unused(path, None, false);
 
     // Reset the current directory *before* running any other check.
     set_current_dir(prev_cwd).unwrap();
@@ -1136,11 +1157,29 @@ fn test_multi_key_dep() {
     let analysis = find_unused(
         &PathBuf::from(TOP_LEVEL).join("./integration-tests/multi-key-dep/Cargo.toml"),
         Some(&MetadataCache::default()),
+        false,
     )
     .expect("find_unused must return an Ok result")
     .expect("no error during processing");
 
     assert_eq!(analysis.unused, &["cc".to_string(), "rand".to_string()]);
+}
+
+#[test]
+fn test_dev_dependencies() {
+    let manifest = PathBuf::from(TOP_LEVEL).join("./integration-tests/dev-dependencies/Cargo.toml");
+    let cache = MetadataCache::default();
+    let analyze = |metadata_cache, include_dev| {
+        find_unused(&manifest, metadata_cache, include_dev)
+            .expect("find_unused must return an Ok result")
+            .expect("no error during processing")
+            .unused
+    };
+
+    assert!(analyze(None, false).is_empty());
+    assert_eq!(analyze(None, true), &[UnusedDep::normal("bytes")]);
+    assert_eq!(analyze(Some(&cache), false), &[UnusedDep::normal("bytes")]);
+    assert_eq!(analyze(Some(&cache), true), &[UnusedDep::normal("bytes")]);
 }
 
 #[test]
@@ -1150,9 +1189,13 @@ fn test_workspace_members_share_metadata() {
 
     let cache = MetadataCache::default();
     let analyze = |rel_path: &str| {
-        find_unused(&PathBuf::from(TOP_LEVEL).join(rel_path), Some(&cache))
-            .expect("find_unused must return an Ok result")
-            .expect("no error during processing")
+        find_unused(
+            &PathBuf::from(TOP_LEVEL).join(rel_path),
+            Some(&cache),
+            false,
+        )
+        .expect("find_unused must return an Ok result")
+        .expect("no error during processing")
     };
 
     let unused = analyze("./integration-tests/multi-crate-workspace/unused/Cargo.toml");
@@ -1177,7 +1220,7 @@ fn test_excluded_nested_workspace_gets_own_metadata() {
     const INNER: &str = "./integration-tests/nested-workspace-root/inner/Cargo.toml";
 
     let unused = |cache: &MetadataCache, rel_path: &str| {
-        find_unused(&PathBuf::from(TOP_LEVEL).join(rel_path), Some(cache))
+        find_unused(&PathBuf::from(TOP_LEVEL).join(rel_path), Some(cache), false)
             .expect("find_unused must return an Ok result")
             .expect("no error during processing")
             .unused
