@@ -14,6 +14,12 @@ pub(crate) enum UseCargoMetadata {
     No,
 }
 
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) enum IncludeDevDependencies {
+    Yes,
+    No,
+}
+
 #[cfg(test)]
 impl UseCargoMetadata {
     fn all() -> &'static [Self] {
@@ -49,6 +55,10 @@ struct MacheteArgs {
     /// also search in ignored files (.gitignore, .ignore, etc.) when searching for files.
     #[argh(switch)]
     no_ignore: bool,
+
+    /// also check dev-dependencies in addition to regular dependencies.
+    #[argh(switch)]
+    include_dev_deps: bool,
 
     /// print version.
     #[argh(switch)]
@@ -170,12 +180,18 @@ fn run_machete() -> anyhow::Result<bool> {
             UseCargoMetadata::No
         };
 
+        let with_dev_dependencies = if args.include_dev_deps {
+            IncludeDevDependencies::Yes
+        } else {
+            IncludeDevDependencies::No
+        };
+
         // Run analysis in parallel. This will spawn new rayon tasks when dependencies are effectively
         // used by any Rust crate.
         let results = manifest_path_entries
             .par_iter()
-            .filter_map(
-                |manifest_path| match find_unused(manifest_path, with_metadata) {
+            .filter_map(|manifest_path| {
+                match find_unused(manifest_path, with_metadata, with_dev_dependencies) {
                     Ok(Some(analysis)) => {
                         if analysis.unused.is_empty() {
                             None
@@ -196,8 +212,8 @@ fn run_machete() -> anyhow::Result<bool> {
                         eprintln!("error when handling {}: {:#}", manifest_path.display(), err);
                         None
                     }
-                },
-            )
+                }
+            })
             .collect::<Vec<_>>();
 
         // Display all the results.
