@@ -42,6 +42,9 @@ cd my-directory && cargo machete
 # alternatively
 
 cargo machete /absolute/path/to/my/directory
+
+# analyze workspace-level dependencies
+cargo machete --workspace
 ```
 
 The **return code** gives an indication whether unused dependencies have been found:
@@ -52,6 +55,21 @@ The **return code** gives an indication whether unused dependencies have been fo
   dependency was found or not).
 
 This can be used in CI situations.
+
+### Workspace Analysis
+
+When working with Rust workspaces, you can use the `--workspace` flag to analyze workspace-level dependencies defined in the workspace's `Cargo.toml` file:
+
+```bash
+cargo machete --workspace
+```
+
+This will:
+- Check dependencies defined in `[workspace.dependencies]`
+- Search for their usage across all workspace members
+- Report unused workspace dependencies
+
+This is particularly useful for large workspaces where dependencies are centrally managed at the workspace level.
 
 ### False positives
 

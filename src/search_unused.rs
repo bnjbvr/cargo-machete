@@ -349,6 +349,7 @@ fn get_full_manifest(
 pub(crate) fn find_unused(
     manifest_path: &Path,
     with_cargo_metadata: UseCargoMetadata,
+    workspace_mode: bool,
 ) -> anyhow::Result<Option<PackageAnalysis>> {
     let mut dir_path = manifest_path.to_path_buf();
     dir_path.pop();
@@ -356,6 +357,11 @@ pub(crate) fn find_unused(
     trace!("trying to open {}...", manifest_path.display());
 
     let (manifest, workspace_metadata) = get_full_manifest(&dir_path, manifest_path)?;
+
+    // If workspace mode is enabled and this is a workspace root, analyze workspace dependencies
+    if workspace_mode && manifest.workspace.is_some() && manifest.package.is_none() {
+        return analyze_workspace_dependencies(manifest_path, with_cargo_metadata);
+    }
 
     let package_name = match manifest.package {
         Some(ref package) => package.name.clone(),
@@ -525,6 +531,131 @@ pub(crate) fn find_unused(
         }
     }
 
+    Ok(Some(analysis))
+}
+
+/// Analyze workspace-level dependencies by checking all workspace members
+fn analyze_workspace_dependencies(
+    workspace_manifest_path: &Path,
+    _with_cargo_metadata: UseCargoMetadata,
+) -> anyhow::Result<Option<PackageAnalysis>> {
+    let mut workspace_dir = workspace_manifest_path.to_path_buf();
+    workspace_dir.pop();
+
+    // Read workspace manifest directly - don't use get_full_manifest for workspace root
+    let workspace_manifest =
+        cargo_toml::Manifest::<PackageMetadata>::from_path_with_metadata(workspace_manifest_path)?;
+
+    let workspace_info = match workspace_manifest.workspace.as_ref() {
+        Some(info) => info,
+        None => return Err(anyhow::anyhow!("Not a valid workspace manifest")),
+    };
+
+    // Get workspace dependencies
+    let workspace_deps = workspace_info.dependencies.clone();
+    if workspace_deps.is_empty() {
+        debug!("No workspace dependencies to analyze");
+        return Ok(None);
+    }
+
+    // Get workspace metadata from the workspace manifest directly
+    let workspace_metadata = workspace_manifest
+        .workspace
+        .as_ref()
+        .and_then(|ws| ws.metadata.as_ref())
+        .and_then(|meta| meta.cargo_machete.as_ref());
+
+    // Collect all source paths from workspace members
+    let all_source_paths = workspace_info
+        .members
+        .iter()
+        .flat_map(|member| {
+            let member_path = workspace_dir.join(member);
+            let member_manifest_path = member_path.join("Cargo.toml");
+
+            if let Ok((member_manifest, _)) = get_full_manifest(&member_path, &member_manifest_path)
+            {
+                collect_paths(
+                    &member_path,
+                    &PackageAnalysis {
+                        metadata: None,
+                        manifest: member_manifest,
+                        package_name: member.to_string(),
+                        unused: Vec::new(),
+                        ignored_used: Vec::new(),
+                    },
+                )
+            } else {
+                Vec::new()
+            }
+        })
+        .collect::<Vec<PathBuf>>();
+
+    if all_source_paths.is_empty() {
+        debug!("No source files found in workspace members");
+        return Ok(None);
+    }
+
+    // Check workspace dependencies usage across all member source files
+    let workspace_ignored = workspace_metadata
+        .as_ref()
+        .map(|meta| meta.ignored.iter().collect::<HashSet<_>>())
+        .unwrap_or_default();
+
+    let empty_map = BTreeMap::new();
+    let workspace_renamed = workspace_metadata
+        .as_ref()
+        .map(|meta| &meta.renamed)
+        .unwrap_or(&empty_map);
+
+    let mut unused_deps = Vec::new();
+
+    for (dep_name, _dep_spec) in workspace_deps {
+        let default_crate_name = dep_name.replace('-', "_");
+        let crate_name = workspace_renamed
+            .get(dep_name.as_str())
+            .map(|renamed| renamed.as_ref())
+            .unwrap_or(&default_crate_name);
+
+        let mut search = Search::new(crate_name)?;
+        let mut found_once = false;
+
+        for path in &all_source_paths {
+            trace!(
+                "Looking for {} in workspace mode in {}",
+                crate_name,
+                path.to_string_lossy()
+            );
+            match search.search_path(path) {
+                Ok(true) => {
+                    found_once = true;
+                    break;
+                }
+                Ok(false) => {}
+                Err(err) => {
+                    eprintln!("{}: {}", path.display(), err);
+                }
+            }
+        }
+
+        if !found_once && !workspace_ignored.contains(&dep_name) {
+            unused_deps.push(dep_name);
+        }
+    }
+
+    // Create a pseudo-package analysis for workspace dependencies
+    let analysis = PackageAnalysis {
+        metadata: None,
+        manifest: workspace_manifest,
+        package_name: "workspace".to_string(),
+        unused: unused_deps,
+        ignored_used: Vec::new(),
+    };
+
+    debug!(
+        "Workspace analysis completed, found {} unused dependencies",
+        analysis.unused.len()
+    );
     Ok(Some(analysis))
 }
 
@@ -805,6 +936,7 @@ fn check_analysis<F: Fn(PackageAnalysis)>(rel_path: &str, callback: F) {
         let analysis = find_unused(
             &PathBuf::from(TOP_LEVEL).join(rel_path),
             *use_cargo_metadata,
+            false,
         )
         .expect("find_unused must return an Ok result")
         .expect("no error during processing");
@@ -889,6 +1021,7 @@ fn test_renamed_field_works() -> anyhow::Result<()> {
     let analysis = find_unused(
         &PathBuf::from(TOP_LEVEL).join("./integration-tests/renamed-dep/Cargo.toml"),
         UseCargoMetadata::No,
+        false,
     )?
     .expect("no error during processing");
     assert_eq!(analysis.unused.as_slice(), &["bytes", "log"]);
@@ -903,6 +1036,7 @@ fn test_renamed_field_workspace_works() -> anyhow::Result<()> {
         &PathBuf::from(TOP_LEVEL)
             .join("./integration-tests/renamed-dep-workspace/inner/Cargo.toml"),
         UseCargoMetadata::No,
+        false,
     )?
     .expect("no error during processing");
     assert_eq!(analysis.unused.as_slice(), &["bytes", "flagset"]);
@@ -916,6 +1050,7 @@ fn test_crate_renaming_works() -> anyhow::Result<()> {
     let analysis = find_unused(
         &PathBuf::from(TOP_LEVEL).join("./integration-tests/renaming-works/Cargo.toml"),
         UseCargoMetadata::Yes,
+        false,
     )?
     .expect("no error during processing");
     assert!(analysis.unused.is_empty());
@@ -924,6 +1059,7 @@ fn test_crate_renaming_works() -> anyhow::Result<()> {
     let analysis = find_unused(
         &PathBuf::from(TOP_LEVEL).join("./integration-tests/renaming-works/Cargo.toml"),
         UseCargoMetadata::No,
+        false,
     )?
     .expect("no error during processing");
     assert_eq!(analysis.unused, &["xml-rs".to_string()]);
@@ -938,6 +1074,7 @@ fn test_unused_renamed_in_registry() -> anyhow::Result<()> {
     let analysis = find_unused(
         &PathBuf::from(TOP_LEVEL).join("./integration-tests/unused-renamed-in-registry/Cargo.toml"),
         UseCargoMetadata::Yes,
+        false,
     )?
     .expect("no error during processing");
     assert_eq!(analysis.unused, &["xml-rs".to_string()]);
@@ -952,6 +1089,7 @@ fn test_unused_renamed_in_spec() -> anyhow::Result<()> {
     let analysis = find_unused(
         &PathBuf::from(TOP_LEVEL).join("./integration-tests/unused-renamed-in-spec/Cargo.toml"),
         UseCargoMetadata::Yes,
+        false,
     )?
     .expect("no error during processing");
     assert_eq!(analysis.unused, &["tracing".to_string()]);
@@ -965,6 +1103,7 @@ fn test_unused_kebab_spec() -> anyhow::Result<()> {
     let analysis = find_unused(
         &PathBuf::from(TOP_LEVEL).join("./integration-tests/unused-kebab-spec/Cargo.toml"),
         UseCargoMetadata::Yes,
+        false,
     )?
     .expect("no error during processing");
     assert_eq!(analysis.unused, &["log-once".to_string()]);
@@ -1008,7 +1147,7 @@ fn test_workspace_from_relative_path() {
     .unwrap();
 
     let path = Path::new("./Cargo.toml");
-    let analysis = find_unused(path, UseCargoMetadata::No);
+    let analysis = find_unused(path, UseCargoMetadata::No, false);
 
     // Reset the current directory *before* running any other check.
     set_current_dir(prev_cwd).unwrap();
@@ -1026,9 +1165,105 @@ fn test_multi_key_dep() {
     let analysis = find_unused(
         &PathBuf::from(TOP_LEVEL).join("./integration-tests/multi-key-dep/Cargo.toml"),
         UseCargoMetadata::Yes,
+        false,
     )
     .expect("find_unused must return an Ok result")
     .expect("no error during processing");
 
     assert_eq!(analysis.unused, &["cc".to_string(), "rand".to_string()]);
+}
+
+#[test]
+fn test_workspace_analysis() {
+    // Test workspace dependency analysis with the workspace root
+    let analysis = find_unused(
+        &PathBuf::from(TOP_LEVEL).join("./integration-tests/workspace-package/Cargo.toml"),
+        UseCargoMetadata::No,
+        true, // Enable workspace mode
+    )
+    .expect("find_unused must return an Ok result");
+
+    // This should return Some since we're analyzing workspace dependencies
+    if let Some(analysis) = analysis {
+        assert_eq!(analysis.package_name, "workspace");
+        // The test expects workspace dependencies analysis
+        assert_eq!(analysis.unused, &["log".to_string()]);
+    } else {
+        panic!("Expected workspace analysis but got None");
+    }
+}
+
+#[test]
+fn test_workspace_unused_deps() {
+    // Test workspace with some used and some unused dependencies
+    let analysis = find_unused(
+        &PathBuf::from(TOP_LEVEL).join("./integration-tests/workspace-unused-deps/Cargo.toml"),
+        UseCargoMetadata::No,
+        true, // Enable workspace mode
+    )
+    .expect("find_unused must return an Ok result");
+
+    if let Some(analysis) = analysis {
+        assert_eq!(analysis.package_name, "workspace");
+        // rand and anyhow should be detected as unused
+        // serde and log are used by members
+        let expected = ["anyhow", "rand"];
+        let expected: HashSet<&str> = expected.iter().copied().collect();
+        let got: HashSet<_> = analysis.unused.iter().map(|s| s.as_str()).collect();
+        assert_eq!(expected, got);
+    } else {
+        panic!("Expected workspace analysis but got None");
+    }
+}
+
+#[test]
+fn test_workspace_ignored_deps() {
+    // Test workspace with ignored dependencies
+    let analysis = find_unused(
+        &PathBuf::from(TOP_LEVEL).join("./integration-tests/workspace-ignored-deps/Cargo.toml"),
+        UseCargoMetadata::No,
+        true, // Enable workspace mode
+    )
+    .expect("find_unused must return an Ok result");
+
+    if let Some(analysis) = analysis {
+        assert_eq!(analysis.package_name, "workspace");
+        // Only rand should be reported as unused (tokio is ignored)
+        assert_eq!(analysis.unused, &["rand".to_string()]);
+    } else {
+        panic!("Expected workspace analysis but got None");
+    }
+}
+
+#[test]
+fn test_workspace_renamed_deps() {
+    // Test workspace with renamed dependencies
+    let analysis = find_unused(
+        &PathBuf::from(TOP_LEVEL).join("./integration-tests/workspace-renamed-deps/Cargo.toml"),
+        UseCargoMetadata::No,
+        true, // Enable workspace mode
+    )
+    .expect("find_unused must return an Ok result");
+
+    if let Some(analysis) = analysis {
+        assert_eq!(analysis.package_name, "workspace");
+        // Only uuid should be reported as unused (rustls-webpki is used as webpki)
+        assert_eq!(analysis.unused, &["uuid".to_string()]);
+    } else {
+        panic!("Expected workspace analysis but got None");
+    }
+}
+
+#[test]
+fn test_workspace_empty_dependencies() {
+    // Test workspace with no dependencies
+    let analysis = find_unused(
+        &PathBuf::from(TOP_LEVEL).join("./integration-tests/workspace-empty/Cargo.toml"),
+        UseCargoMetadata::No,
+        true, // Enable workspace mode
+    )
+    .expect("find_unused must return an Ok result");
+
+    // Should return None since there are no workspace dependencies to analyze
+    assert!(analysis.is_none());
 }

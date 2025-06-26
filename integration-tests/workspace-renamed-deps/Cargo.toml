@@ -1,0 +1,12 @@
+[workspace]
+members = ["lib"]
+
+[workspace.dependencies]
+# This crate has a different import name than package name
+rustls-webpki = "0.102"
+# This is unused and should be reported
+uuid = "1.0"
+
+[workspace.metadata.cargo-machete.renamed]
+# rustls-webpki is imported as webpki
+"rustls-webpki" = "webpki"
