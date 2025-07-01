@@ -29,8 +29,8 @@ mod meta {
     use serde::{Deserialize, Serialize};
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(rename_all = "kebab-case")]
     pub struct PackageMetadata {
-        #[serde(rename = "cargo-machete")]
         pub cargo_machete: Option<MetadataFields>,
     }
 
