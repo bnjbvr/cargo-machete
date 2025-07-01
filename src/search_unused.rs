@@ -1,5 +1,5 @@
 use cargo_metadata::CargoOpt;
-use globset::{Glob, GlobSetBuilder};
+use globset::{Glob, GlobSet, GlobSetBuilder};
 use grep::{
     matcher::LineTerminator,
     regex::{RegexMatcher, RegexMatcherBuilder},
@@ -146,6 +146,41 @@ fn build_ignored_dirs_globset(ignored_dirs: &HashSet<PathBuf>) -> anyhow::Result
     Ok(builder.build()?)
 }
 
+pub(crate) fn is_dir_ignored(
+    path: &Path,
+    dir_path: &Path,
+    globset: &GlobSet,
+    workspace_dir: Option<&Path>,
+) -> bool {
+    let relative_path = path.strip_prefix(dir_path).unwrap_or(path);
+    let relative_path_str = relative_path.to_string_lossy().replace('\\', "/");
+
+    // Check the path itself first
+    if globset.is_match(&relative_path_str) {
+        trace!("is_ignored: {path:?} is_match: true (exact match)");
+        return true;
+    }
+
+    // Check all parent directories of the path up to the dir_path and/or workspace directory
+    let mut current_path = relative_path;
+    while let Some(parent) = current_path.parent() {
+        let parent_str = parent.to_string_lossy().replace('\\', "/");
+        if globset.is_match(&parent_str) {
+            trace!(
+                "is_ignored: {path:?} is_match: true (parent match: {})",
+                parent_str
+            );
+            return true;
+        } else if parent == dir_path || workspace_dir.is_some_and(|p| parent == p) {
+            break;
+        }
+        current_path = parent;
+    }
+
+    trace!("is_ignored: {path:?} is_match: false");
+    false
+}
+
 /// Returns all the paths to the Rust source files for a crate contained at the given path.
 fn collect_paths(
     workspace_manifest_path: Option<&Path>,
@@ -154,8 +189,6 @@ fn collect_paths(
     ignored_dirs: &HashSet<PathBuf>,
     workspace_ignored_dirs: &HashSet<PathBuf>,
 ) -> Vec<PathBuf> {
-    let workspace_dir = workspace_manifest_path.and_then(Path::parent);
-
     let mut root_paths = HashSet::new();
 
     if let Some(path) = analysis
@@ -202,56 +235,20 @@ fn collect_paths(
         trace!("adding src/ since paths was empty");
     }
 
-    let package_ignored_globset = build_ignored_dirs_globset(ignored_dirs).unwrap_or_else(|err| {
-        warn!("Failed to build package ignored dirs globset: {}", err);
-        globset::GlobSet::empty()
-    });
-
-    let workspace_ignored_globset = build_ignored_dirs_globset(workspace_ignored_dirs)
-        .unwrap_or_else(|err| {
-            warn!("Failed to build workspace ignored dirs globset: {}", err);
-            globset::GlobSet::empty()
-        });
-
-    let is_ignored = |path: &Path| {
-        if let Some(workspace_dir) = workspace_dir {
-            let workspace_relative_path = path.strip_prefix(workspace_dir).unwrap_or(path);
-            let workspace_relative_path_str =
-                workspace_relative_path.to_string_lossy().replace('\\', "/");
-
-            let is_match = workspace_ignored_globset.is_match(&workspace_relative_path_str);
-            trace!(
-                "checking path: {path:?} workspace_relative_path: {workspace_relative_path:?} {is_match}"
-            );
-            if is_match {
-                return true;
-            }
-        }
-
-        let package_relative_path = path.strip_prefix(dir_path).unwrap_or(path);
-        let package_relative_path_str = package_relative_path.to_string_lossy().replace('\\', "/");
-
-        package_ignored_globset.is_match(&package_relative_path_str)
-    };
-
-    let is_ignored_check_parents = |path: &Path| {
-        let mut path = path;
-        while let Some(parent) = path.parent() {
-            if is_ignored(parent) {
-                return true;
-            } else if workspace_dir.is_some_and(|p| parent == p) {
-                break;
-            }
-            path = parent;
-        }
-        is_ignored(path)
-    };
+    let glob_ignored_dirs = GlobIgnoredDirs::new(
+        dir_path.to_path_buf(),
+        ignored_dirs,
+        workspace_ignored_dirs,
+        workspace_manifest_path
+            .and_then(Path::parent)
+            .map(PathBuf::from),
+    );
 
     // Collect all final paths for the crate first.
     let paths: Vec<PathBuf> = root_paths
         .iter()
         .map(|root| dir_path.join(root))
-        .filter(|path| !is_ignored_check_parents(path))
+        .filter(|path| !glob_ignored_dirs.is_ignored(path))
         .flat_map(|path| WalkDir::new(path).into_iter())
         .filter_map(|result| match result {
             Ok(dir_entry) => Some(dir_entry),
@@ -263,7 +260,7 @@ fn collect_paths(
         .filter_map(|dir_entry| {
             let dir_entry_path = dir_entry.path();
 
-            if is_ignored_check_parents(dir_entry_path) {
+            if glob_ignored_dirs.is_ignored(dir_entry_path) {
                 trace!("skipping ignored directory: {}", dir_entry_path.display());
                 return None;
             }
@@ -434,6 +431,56 @@ fn get_full_manifest(
         ws_manifest_and_path
             .and_then(|(manifest, _path)| manifest.workspace?.metadata?.cargo_machete),
     ))
+}
+
+struct GlobIgnoredDirs {
+    dir_path: PathBuf,
+    package_globset: globset::GlobSet,
+    workspace_globset: globset::GlobSet,
+    workspace_dir: Option<PathBuf>,
+}
+
+impl GlobIgnoredDirs {
+    fn new(
+        dir_path: PathBuf,
+        ignored_dirs: &HashSet<PathBuf>,
+        workspace_ignored_dirs: &HashSet<PathBuf>,
+        workspace_dir: Option<PathBuf>,
+    ) -> Self {
+        let package_globset = build_ignored_dirs_globset(ignored_dirs).unwrap_or_else(|err| {
+            warn!("Failed to build package ignored dirs globset: {}", err);
+            globset::GlobSet::empty()
+        });
+        let workspace_globset =
+            build_ignored_dirs_globset(workspace_ignored_dirs).unwrap_or_else(|err| {
+                warn!("Failed to build workspace ignored dirs globset: {}", err);
+                globset::GlobSet::empty()
+            });
+
+        Self {
+            dir_path,
+            package_globset,
+            workspace_globset,
+            workspace_dir,
+        }
+    }
+
+    fn is_ignored(&self, path: &Path) -> bool {
+        let workspace_dir = self.workspace_dir.as_deref();
+
+        if let Some(workspace_dir) = workspace_dir {
+            if is_dir_ignored(
+                path,
+                workspace_dir,
+                &self.workspace_globset,
+                Some(workspace_dir),
+            ) {
+                return true;
+            }
+        }
+
+        is_dir_ignored(path, &self.dir_path, &self.package_globset, workspace_dir)
+    }
 }
 
 pub(crate) fn find_unused(
