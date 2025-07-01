@@ -1,0 +1,15 @@
+[package]
+name = "ignored-dirs"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+log = "0.4.14"      # used in main.rs (should not be reported as unused)
+log-once = "0.3.1"  # used in ignored_dir/ (should be reported as unused)
+rand = "0.8.5"      # used in normal_dir/ (should not be reported as unused)
+rand_core = "0.6.3" # not used anywhere (should be reported as unused)
+
+[package.metadata.cargo-machete]
+ignored-dirs = ["src/ignored_dir"]

@@ -1,4 +1,5 @@
 use cargo_metadata::CargoOpt;
+use globset::{Glob, GlobSetBuilder};
 use grep::{
     matcher::LineTerminator,
     regex::{RegexMatcher, RegexMatcherBuilder},
@@ -22,6 +23,7 @@ use self::meta::PackageMetadata;
 
 mod meta {
     use std::collections::BTreeMap;
+    use std::path::PathBuf;
 
     use serde::{Deserialize, Serialize};
 
@@ -32,11 +34,16 @@ mod meta {
     }
 
     #[derive(Serialize, Deserialize)]
+    #[serde(rename_all = "kebab-case")]
     pub struct MetadataFields {
         /// Crates triggering false positives in `cargo-machete`, which should not be reported as
         /// unused.
         #[serde(default)]
         pub ignored: Vec<String>,
+
+        /// Directories to ignore when searching for crate usage.
+        #[serde(default)]
+        pub ignored_dirs: Vec<PathBuf>,
 
         /// Crates whose name is different than the name in the Cargo.toml.
         ///
@@ -126,8 +133,29 @@ fn make_multiline_regexp(name: &str) -> String {
     )
 }
 
+/// Build a globset from the ignored directories
+fn build_ignored_dirs_globset(ignored_dirs: &HashSet<PathBuf>) -> anyhow::Result<globset::GlobSet> {
+    let mut builder = GlobSetBuilder::new();
+
+    for ignored_dir in ignored_dirs {
+        let normalized_ignored = ignored_dir.to_string_lossy().replace('\\', "/");
+
+        builder.add(Glob::new(&normalized_ignored)?);
+    }
+
+    Ok(builder.build()?)
+}
+
 /// Returns all the paths to the Rust source files for a crate contained at the given path.
-fn collect_paths(dir_path: &Path, analysis: &PackageAnalysis) -> Vec<PathBuf> {
+fn collect_paths(
+    workspace_manifest_path: Option<&Path>,
+    dir_path: &Path,
+    analysis: &PackageAnalysis,
+    ignored_dirs: &HashSet<PathBuf>,
+    workspace_ignored_dirs: &HashSet<PathBuf>,
+) -> Vec<PathBuf> {
+    let workspace_dir = workspace_manifest_path.and_then(Path::parent);
+
     let mut root_paths = HashSet::new();
 
     if let Some(path) = analysis
@@ -174,23 +202,76 @@ fn collect_paths(dir_path: &Path, analysis: &PackageAnalysis) -> Vec<PathBuf> {
         trace!("adding src/ since paths was empty");
     }
 
+    let package_ignored_globset = build_ignored_dirs_globset(ignored_dirs).unwrap_or_else(|err| {
+        warn!("Failed to build package ignored dirs globset: {}", err);
+        globset::GlobSet::empty()
+    });
+
+    let workspace_ignored_globset = build_ignored_dirs_globset(workspace_ignored_dirs)
+        .unwrap_or_else(|err| {
+            warn!("Failed to build workspace ignored dirs globset: {}", err);
+            globset::GlobSet::empty()
+        });
+
+    let is_ignored = |path: &Path| {
+        if let Some(workspace_dir) = workspace_dir {
+            let workspace_relative_path = path.strip_prefix(workspace_dir).unwrap_or(path);
+            let workspace_relative_path_str =
+                workspace_relative_path.to_string_lossy().replace('\\', "/");
+
+            let is_match = workspace_ignored_globset.is_match(&workspace_relative_path_str);
+            trace!(
+                "checking path: {path:?} workspace_relative_path: {workspace_relative_path:?} {is_match}"
+            );
+            if is_match {
+                return true;
+            }
+        }
+
+        let package_relative_path = path.strip_prefix(dir_path).unwrap_or(path);
+        let package_relative_path_str = package_relative_path.to_string_lossy().replace('\\', "/");
+
+        package_ignored_globset.is_match(&package_relative_path_str)
+    };
+
+    let is_ignored_check_parents = |path: &Path| {
+        let mut path = path;
+        while let Some(parent) = path.parent() {
+            if is_ignored(parent) {
+                return true;
+            } else if workspace_dir.is_some_and(|p| parent == p) {
+                break;
+            }
+            path = parent;
+        }
+        is_ignored(path)
+    };
+
     // Collect all final paths for the crate first.
     let paths: Vec<PathBuf> = root_paths
         .iter()
-        .flat_map(|root| WalkDir::new(dir_path.join(root)).into_iter())
-        .filter_map(|result| {
-            let dir_entry = match result {
-                Ok(dir_entry) => dir_entry,
-                Err(err) => {
-                    eprintln!("{err}");
-                    return None;
-                }
-            };
+        .map(|root| dir_path.join(root))
+        .filter(|path| !is_ignored_check_parents(path))
+        .flat_map(|path| WalkDir::new(path).into_iter())
+        .filter_map(|result| match result {
+            Ok(dir_entry) => Some(dir_entry),
+            Err(err) => {
+                eprintln!("{err}");
+                None
+            }
+        })
+        .filter_map(|dir_entry| {
+            let dir_entry_path = dir_entry.path();
+
+            if is_ignored_check_parents(dir_entry_path) {
+                trace!("skipping ignored directory: {}", dir_entry_path.display());
+                return None;
+            }
+
             if !dir_entry.file_type().is_file() {
                 return None;
             }
-            if dir_entry
-                .path()
+            if dir_entry_path
                 .extension()
                 .is_none_or(|ext| ext.to_string_lossy() != "rs")
             {
@@ -291,14 +372,35 @@ impl Search {
     }
 }
 
+fn get_workspace_manifest_path(dir_path: &Path) -> Option<PathBuf> {
+    // Canonicalize the path, so as to get the full "parenthood" of relative paths.
+    let path = std::fs::canonicalize(dir_path).unwrap_or_else(|err| {
+        warn!("error when canonicalizing dir_path: {err}");
+        dir_path.to_owned()
+    });
+    let mut path: &Path = &path;
+    while let Some(parent) = path.parent() {
+        let workspace_cargo_path = parent.join("Cargo.toml");
+        if let Ok(workspace_manifest) =
+            cargo_toml::Manifest::<PackageMetadata>::from_path_with_metadata(&workspace_cargo_path)
+        {
+            if workspace_manifest.workspace.is_some() {
+                return Some(workspace_cargo_path);
+            }
+        }
+        path = parent;
+    }
+    None
+}
+
 /// Read a manifest and try to find a workspace manifest to complete the data available in the
 /// manifest.
 ///
 /// This will look up the file tree to find the Cargo.toml workspace manifest, assuming it's on a
 /// parent directory.
 fn get_full_manifest(
-    dir_path: &Path,
     manifest_path: &Path,
+    workspace_manifest_path: Option<&Path>,
 ) -> anyhow::Result<(
     cargo_toml::Manifest<PackageMetadata>,
     Option<meta::MetadataFields>,
@@ -311,31 +413,19 @@ fn get_full_manifest(
     let mut manifest =
         cargo_toml::Manifest::<PackageMetadata>::from_slice_with_metadata(&cargo_toml_content)?;
 
-    let mut ws_manifest_and_path = None;
-
-    // Canonicalize the path, so as to get the full "parenthood" of relative paths.
-    let mut dir_path = std::fs::canonicalize(dir_path).unwrap_or_else(|err| {
-        warn!("error when canonicalizing dir_path: {err}");
-        dir_path.to_owned()
-    });
-
-    // Try to find a workspace manifest, starting from the current directory, going up to the
-    // filesystem's root.
-    while dir_path.pop() {
-        let workspace_cargo_path = dir_path.join("Cargo.toml");
+    let ws_manifest_and_path = workspace_manifest_path.and_then(|path| {
         if let Ok(workspace_manifest) =
-            cargo_toml::Manifest::<PackageMetadata>::from_path_with_metadata(&workspace_cargo_path)
+            cargo_toml::Manifest::<PackageMetadata>::from_path_with_metadata(path)
         {
-            if workspace_manifest.workspace.is_some() {
-                ws_manifest_and_path = Some((workspace_manifest, workspace_cargo_path));
-                break;
-            }
+            return Some((workspace_manifest, path));
         }
-    }
+
+        None
+    });
 
     manifest.complete_from_path_and_workspace(
         manifest_path,
-        ws_manifest_and_path.as_ref().map(|(m, p)| (m, p.as_path())),
+        ws_manifest_and_path.as_ref().map(|(m, p)| (m, *p)),
     )?;
 
     Ok((
@@ -355,7 +445,9 @@ pub(crate) fn find_unused(
 
     trace!("trying to open {}...", manifest_path.display());
 
-    let (manifest, workspace_metadata) = get_full_manifest(&dir_path, manifest_path)?;
+    let workspace_manifest_path = get_workspace_manifest_path(&dir_path);
+    let workspace_manifest_path = workspace_manifest_path.as_deref();
+    let (manifest, workspace_metadata) = get_full_manifest(manifest_path, workspace_manifest_path)?;
 
     let package_name = match manifest.package {
         Some(ref package) => package.name.clone(),
@@ -371,7 +463,43 @@ pub(crate) fn find_unused(
         matches!(with_cargo_metadata, UseCargoMetadata::Yes),
     )?;
 
-    let paths = collect_paths(&dir_path, &analysis);
+    let meta = analysis
+        .manifest
+        .package
+        .as_ref()
+        .and_then(|package| package.metadata.as_ref()?.cargo_machete.as_ref());
+
+    let ignored_dirs = meta
+        .map(|meta| meta.ignored_dirs.iter().cloned().collect::<HashSet<_>>())
+        .unwrap_or_default();
+
+    let (workspace_ignored_dirs, workspace_ignored, workspace_renamed): (
+        HashSet<PathBuf>,
+        HashSet<_>,
+        _,
+    ) = workspace_metadata
+        .map(
+            |MetadataFields {
+                 ignored_dirs,
+                 ignored,
+                 renamed,
+             }| {
+                (
+                    HashSet::from_iter(ignored_dirs),
+                    HashSet::from_iter(ignored),
+                    renamed,
+                )
+            },
+        )
+        .unwrap_or_default();
+
+    let paths = collect_paths(
+        workspace_manifest_path,
+        &dir_path,
+        &analysis,
+        &ignored_dirs,
+        &workspace_ignored_dirs,
+    );
 
     // TODO extend to dev dependencies + build dependencies, and be smarter in the grouping of
     // searched paths
@@ -448,12 +576,6 @@ pub(crate) fn find_unused(
             .collect()
     };
 
-    let meta = analysis
-        .manifest
-        .package
-        .as_ref()
-        .and_then(|package| package.metadata.as_ref()?.cargo_machete.as_ref());
-
     // Keep a side-list of ignored dependencies (likely false positives).
     let ignored = meta
         .map(|meta| meta.ignored.iter().collect::<HashSet<_>>())
@@ -462,10 +584,6 @@ pub(crate) fn find_unused(
     // Keep a list of renamed dependencies
     static NO_RENAMED: BTreeMap<Box<str>, Box<str>> = BTreeMap::new();
     let renamed = meta.map(|meta| &meta.renamed).unwrap_or(&NO_RENAMED);
-
-    let (workspace_ignored, workspace_renamed): (HashSet<_>, _) = workspace_metadata
-        .map(|MetadataFields { ignored, renamed }| (HashSet::from_iter(ignored), renamed))
-        .unwrap_or_default();
 
     enum SingleDepResult {
         /// Dependency is unused and not marked as ignored.
@@ -563,7 +681,8 @@ impl Sink for StopAfterFirstMatch {
     }
 }
 
-#[test]
+#[cfg(test)]
+#[test_log::test]
 fn test_regexp() -> anyhow::Result<()> {
     fn test_one(crate_name: &str, content: &str) -> anyhow::Result<bool> {
         let mut search = Search::new(crate_name)?;
@@ -812,7 +931,8 @@ fn check_analysis<F: Fn(PackageAnalysis)>(rel_path: &str, callback: F) {
     }
 }
 
-#[test]
+#[cfg(test)]
+#[test_log::test]
 fn test_just_unused() {
     // a crate that simply does not use a dependency it refers to
     check_analysis("./integration-tests/just-unused/Cargo.toml", |analysis| {
@@ -820,7 +940,8 @@ fn test_just_unused() {
     });
 }
 
-#[test]
+#[cfg(test)]
+#[test_log::test]
 fn test_just_unused_with_manifest() {
     // a crate that does not use a dependency it refers to, and uses workspace properties
     check_analysis(
@@ -831,7 +952,8 @@ fn test_just_unused_with_manifest() {
     );
 }
 
-#[test]
+#[cfg(test)]
+#[test_log::test]
 fn test_unused_transitive() {
     // lib1 has zero dependencies
     check_analysis(
@@ -858,7 +980,8 @@ fn test_unused_transitive() {
     );
 }
 
-#[test]
+#[cfg(test)]
+#[test_log::test]
 fn test_false_positive_macro_use() {
     // when a lib uses a dependency via a macro, there's no way we can find it by scanning the
     // source code.
@@ -870,7 +993,8 @@ fn test_false_positive_macro_use() {
     );
 }
 
-#[test]
+#[cfg(test)]
+#[test_log::test]
 fn test_with_bench() {
     // when a package has a bench file designated by binary name, it seems that `cargo_toml`
     // doesn't fill in a default path to the source code.
@@ -882,7 +1006,8 @@ fn test_with_bench() {
     );
 }
 
-#[test]
+#[cfg(test)]
+#[test_log::test]
 fn test_renamed_field_works() -> anyhow::Result<()> {
     // cargo-machete properly handles a correct rename (rustls-webpki -> webpki), when the rename
     // happens in the crate manifest
@@ -895,7 +1020,8 @@ fn test_renamed_field_works() -> anyhow::Result<()> {
     Ok(())
 }
 
-#[test]
+#[cfg(test)]
+#[test_log::test]
 fn test_renamed_field_workspace_works() -> anyhow::Result<()> {
     // cargo-machete properly handles a correct rename (rustls-webpki -> webpki), when the rename
     // happens in the workspace manifest
@@ -909,7 +1035,8 @@ fn test_renamed_field_workspace_works() -> anyhow::Result<()> {
     Ok(())
 }
 
-#[test]
+#[cfg(test)]
+#[test_log::test]
 fn test_crate_renaming_works() -> anyhow::Result<()> {
     // when a lib like xml-rs is exposed with a different name, cargo-machete doesn't return false
     // positives.
@@ -931,7 +1058,8 @@ fn test_crate_renaming_works() -> anyhow::Result<()> {
     Ok(())
 }
 
-#[test]
+#[cfg(test)]
+#[test_log::test]
 fn test_unused_renamed_in_registry() -> anyhow::Result<()> {
     // when a lib like xml-rs is exposed with a different name,
     // cargo-machete reports the unused spec properly.
@@ -945,7 +1073,8 @@ fn test_unused_renamed_in_registry() -> anyhow::Result<()> {
     Ok(())
 }
 
-#[test]
+#[cfg(test)]
+#[test_log::test]
 fn test_unused_renamed_in_spec() -> anyhow::Result<()> {
     // when a lib is renamed through key = { package = … },
     // cargo-machete reports the unused spec properly.
@@ -959,7 +1088,8 @@ fn test_unused_renamed_in_spec() -> anyhow::Result<()> {
     Ok(())
 }
 
-#[test]
+#[cfg(test)]
+#[test_log::test]
 fn test_unused_kebab_spec() -> anyhow::Result<()> {
     // when a lib uses kebab naming, cargo-machete reports the unused spec properly.
     let analysis = find_unused(
@@ -972,7 +1102,8 @@ fn test_unused_kebab_spec() -> anyhow::Result<()> {
     Ok(())
 }
 
-#[test]
+#[cfg(test)]
+#[test_log::test]
 fn test_ignore_deps_works() {
     // ensure that ignored deps listed in Cargo.toml package.metadata.cargo-machete.ignored are
     // correctly ignored.
@@ -982,7 +1113,8 @@ fn test_ignore_deps_works() {
     });
 }
 
-#[test]
+#[cfg(test)]
+#[test_log::test]
 fn test_ignore_deps_workspace_works() {
     // ensure that ignored deps listed in Cargo.toml workspace.metadata.cargo-machete.ignored are
     // correctly ignored.
@@ -995,7 +1127,8 @@ fn test_ignore_deps_workspace_works() {
     );
 }
 
-#[test]
+#[cfg(test)]
+#[test_log::test]
 fn test_workspace_from_relative_path() {
     // Ensure that finding a workspace using a relative path works.
     use std::env::{current_dir, set_current_dir};
@@ -1021,7 +1154,8 @@ fn test_workspace_from_relative_path() {
     assert!(analysis.ignored_used.is_empty());
 }
 
-#[test]
+#[cfg(test)]
+#[test_log::test]
 fn test_multi_key_dep() {
     let analysis = find_unused(
         &PathBuf::from(TOP_LEVEL).join("./integration-tests/multi-key-dep/Cargo.toml"),
@@ -1031,4 +1165,102 @@ fn test_multi_key_dep() {
     .expect("no error during processing");
 
     assert_eq!(analysis.unused, &["cc".to_string(), "rand".to_string()]);
+}
+
+#[cfg(test)]
+#[test_log::test]
+fn test_ignore_dirs_works() {
+    check_analysis("./integration-tests/ignored-dirs/Cargo.toml", |analysis| {
+        let mut expected_unused = vec!["log-once".to_string(), "rand_core".to_string()];
+        expected_unused.sort();
+        let mut actual_unused = analysis.unused.clone();
+        actual_unused.sort();
+        assert_eq!(actual_unused, expected_unused);
+        assert!(analysis.ignored_used.is_empty());
+    });
+}
+
+#[cfg(test)]
+#[test_log::test]
+fn test_ignore_dirs_workspace_works() {
+    check_analysis(
+        "./integration-tests/ignored-dirs-workspace/inner/Cargo.toml",
+        |analysis| {
+            let mut expected_unused = vec!["rand".to_string(), "rand_core".to_string()];
+            expected_unused.sort();
+            let mut actual_unused = analysis.unused.clone();
+            actual_unused.sort();
+            assert_eq!(actual_unused, expected_unused);
+            assert!(analysis.ignored_used.is_empty());
+        },
+    );
+}
+
+#[cfg(test)]
+#[test_log::test]
+fn test_ignore_dirs_nested_works() {
+    check_analysis(
+        "./integration-tests/ignored-dirs-nested/Cargo.toml",
+        |analysis| {
+            // Should report regex as unused (not used anywhere)
+            // Should NOT report log, serde as unused (used in main and normal dirs)
+            // Should report tokio, uuid, rand as unused (used only in ignored dirs)
+            let mut expected_unused = vec![
+                "regex".to_string(),
+                "tokio".to_string(),
+                "uuid".to_string(),
+                "rand".to_string(),
+            ];
+            expected_unused.sort();
+            let mut actual_unused = analysis.unused.clone();
+            actual_unused.sort();
+            assert_eq!(actual_unused, expected_unused);
+            assert!(analysis.ignored_used.is_empty());
+        },
+    );
+}
+
+#[cfg(test)]
+#[test_log::test]
+fn test_ignore_dirs_cross_platform_paths() {
+    check_analysis(
+        "./integration-tests/ignored-dirs-cross-platform/Cargo.toml",
+        |analysis| {
+            // Should report regex as unused (not used anywhere)
+            // Should NOT report log as unused (used in main.rs)
+            // Should report serde and tokio as unused (used only in ignored path dirs)
+            let mut expected_unused = vec![
+                "regex".to_string(),
+                "serde".to_string(),
+                "tokio".to_string(),
+            ];
+            expected_unused.sort();
+            let mut actual_unused = analysis.unused.clone();
+            actual_unused.sort();
+            assert_eq!(actual_unused, expected_unused);
+            assert!(analysis.ignored_used.is_empty());
+        },
+    );
+}
+
+#[cfg(test)]
+#[test_log::test]
+fn test_ignore_dirs_glob_patterns() {
+    check_analysis(
+        "./integration-tests/ignored-dirs-glob/Cargo.toml",
+        |analysis| {
+            // Should report serde as unused (used in generated/ which matches **/generated glob)
+            // Should report regex as unused (used in test_helpers/ which matches test_* glob)
+            // Should report uuid as unused (not used anywhere)
+            // Should NOT report log as unused (used in main.rs)
+            // Should NOT report tokio as unused (used in normal/ which doesn't match any glob)
+            let mut expected_unused =
+                vec!["regex".to_string(), "serde".to_string(), "uuid".to_string()];
+            expected_unused.sort();
+            let mut actual_unused = analysis.unused.clone();
+            actual_unused.sort();
+            assert_eq!(actual_unused, expected_unused);
+            assert!(analysis.ignored_used.is_empty());
+        },
+    );
 }

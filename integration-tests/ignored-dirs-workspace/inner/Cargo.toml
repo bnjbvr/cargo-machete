@@ -1,0 +1,12 @@
+[package]
+name = "ignored-dirs-workspace-inner"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+log-once = "0.3.1"     # used in main.rs (should not be reported as unused)
+rand = "0.8.5"         # used in workspace_ignored_dir/ (should be reported as unused due to workspace config)
+rand_core = "0.6.3"    # not used anywhere (should be reported as unused)
+serde.workspace = true # used in normal_dir/ (should not be reported as unused)

@@ -1,0 +1,14 @@
+[package]
+name = "ignored-dirs-glob"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+log = "0.4.14"    # used in main.rs (should not be reported as unused)
+serde = "1.0.136" # used in generated/ (should be reported as unused due to glob)
+regex = "1.5.4"   # used in test_helpers/ (should be reported as unused due to glob)
+tokio = "1.17.0"  # used in normal/ (should not be reported as unused)
+uuid = "1.0.0"    # not used anywhere (should be reported as unused)
+
+[package.metadata.cargo-machete]
+ignored-dirs = ["**/generated", "src/test_*"]

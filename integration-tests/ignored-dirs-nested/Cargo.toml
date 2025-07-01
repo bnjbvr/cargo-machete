@@ -1,0 +1,18 @@
+[package]
+name = "ignored-dirs-nested"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+log = "0.4.14" # used in main.rs (should not be reported as unused)
+serde = "1.0"  # used in src/normal/mod.rs (should not be reported as unused)
+tokio = "1.0"  # used in src/ignored/nested/deep/mod.rs (should be reported as unused - deeply nested ignored)
+uuid = "1.0"   # used in src/ignored/mod.rs (should be reported as unused - in ignored dir)
+rand = "0.8.5" # used in src/ignored/nested/mod.rs (should be reported as unused - nested in ignored)
+regex = "1.0"  # not used anywhere (should be reported as unused)
+
+[package.metadata.cargo-machete]
+ignored-dirs = [
+  "src/ignored",    # Test basic ignored directory
+  "src/other/deep", # Test full nested path specification
+]

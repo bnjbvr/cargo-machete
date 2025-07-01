@@ -79,6 +79,42 @@ flag, which will call `cargo metadata --all-features` to find final dependency
 names, more accurate dependencies per build type, etc. ⚠ This may modify the
 `Cargo.lock` files in your projects.
 
+### Ignored directories
+
+You can also ignore entire directories when searching for dependency usage. This
+is useful if you have generated code, examples, or other directories where
+dependencies might be used but shouldn't count as "real" usage.
+
+The `ignored_dirs` configuration supports both exact directory names and glob patterns,
+allowing for flexible directory matching:
+
+```toml
+[dependencies]
+serde = "1.0" # Used only in generated code in the "generated" directory
+
+# in an individual package Cargo.toml
+[package.metadata.cargo-machete]
+ignored_dirs = [
+    "generated",        # Exact directory name
+    "examples",         # Exact directory name
+    "test_*",          # Glob: matches any directory starting with "test_"
+    "**/generated",    # Glob: matches "generated" directories at any depth
+    "temp_*/**",       # Glob: matches any files in directories starting with "temp_"
+]
+
+# in a workspace Cargo.toml
+[workspace.metadata.cargo-machete]
+ignored_dirs = ["generated", "examples", "test_*", "**/generated"]
+```
+
+Glob patterns use standard shell-style wildcards:
+- `*` matches any number of characters except `/`
+- `**` matches any number of characters including `/` (recursive)
+- `?` matches exactly one character except `/`
+
+Any dependency that is used only within the specified directories will be
+reported as unused.
+
 ### Renamed crates
 
 Some crates have a different import name, than their dependency name (e.g.

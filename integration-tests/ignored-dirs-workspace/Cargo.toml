@@ -1,0 +1,9 @@
+[workspace]
+members = ["./inner"]
+
+[workspace.dependencies]
+log = "0.4.14"
+serde = "1"
+
+[workspace.metadata.cargo-machete]
+ignored-dirs = ["inner/src/workspace_ignored_dir"]
