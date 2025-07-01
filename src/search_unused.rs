@@ -639,6 +639,15 @@ pub(crate) fn find_unused(
         IgnoredButUsed(String),
     }
 
+    let glob_ignored_dirs = GlobIgnoredDirs::new(
+        dir_path.to_path_buf(),
+        &ignored_dirs,
+        &workspace_ignored_dirs,
+        workspace_manifest_path
+            .and_then(Path::parent)
+            .map(PathBuf::from),
+    );
+
     let results: Vec<SingleDepResult> = dependencies
         .into_par_iter()
         .filter_map(|(dep_name, crate_name)| {
@@ -654,6 +663,15 @@ pub(crate) fn find_unused(
 
             let mut found_once = false;
             for path in &paths {
+                if glob_ignored_dirs.is_ignored(path) {
+                    trace!(
+                        "skipping ignored path when looking for {}: {}",
+                        crate_name,
+                        path.to_string_lossy()
+                    );
+                    continue;
+                }
+
                 trace!("looking for {} in {}", crate_name, path.to_string_lossy(),);
                 match search.search_path(path) {
                     Ok(true) => {
