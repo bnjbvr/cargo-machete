@@ -147,7 +147,7 @@ fn build_ignored_dirs_globset(ignored_dirs: &HashSet<PathBuf>) -> anyhow::Result
     Ok(builder.build()?)
 }
 
-pub(crate) fn is_dir_ignored(
+fn is_dir_ignored(
     path: &Path,
     dir_path: &Path,
     globset: &GlobSet,
