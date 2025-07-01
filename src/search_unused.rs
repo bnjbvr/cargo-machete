@@ -1329,3 +1329,39 @@ fn test_ignore_dirs_glob_patterns() {
         },
     );
 }
+
+#[cfg(test)]
+#[test_log::test]
+fn test_ignore_dirs_parent_matching_flexibility() {
+    use std::collections::HashSet;
+    use std::path::{Path, PathBuf};
+
+    // Test that the parent directory checking preserves glob pattern flexibility
+    let test_cases = vec![
+        // Simple directory name - subdirectories should be ignored
+        ("test-resources", "test-resources/workspaces/basic", true),
+        ("test-resources", "other-resources/workspaces/basic", false),
+        // Wildcard patterns - subdirectories should be ignored
+        ("test-*", "test-resources/workspaces/basic", true),
+        ("test-*", "test-files/something", true),
+        ("test-*", "other-files/something", false),
+        // Direct matches should work
+        ("generated", "generated", true),
+        ("generated", "generated/files", true), // subdirectory of generated
+        ("generated", "src/generated/files", false), // generated is not a parent of src/generated/files
+        ("generated", "src/manual", false),
+    ];
+
+    for (pattern, test_path, expected) in test_cases {
+        let mut ignored_dirs = HashSet::new();
+        ignored_dirs.insert(PathBuf::from(pattern));
+
+        let globset = build_ignored_dirs_globset(&ignored_dirs).unwrap();
+        let result = is_dir_ignored(Path::new(test_path), Path::new(""), &globset, None);
+
+        assert_eq!(
+            result, expected,
+            "Pattern '{pattern}' vs path '{test_path}': got {result}, expected {expected}"
+        );
+    }
+}
