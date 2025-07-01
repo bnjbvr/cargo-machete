@@ -362,7 +362,8 @@ fn main() {
 #[cfg(test)]
 const TOP_LEVEL: &str = concat!(env!("CARGO_MANIFEST_DIR"));
 
-#[test]
+#[cfg(test)]
+#[test_log::test]
 fn test_ignore_target() {
     let entries = collect_paths(
         &PathBuf::from(TOP_LEVEL).join("./integration-tests/with-target/"),
@@ -395,7 +396,8 @@ fn test_ignore_target() {
     assert!(!entries.unwrap().is_empty());
 }
 
-#[test]
+#[cfg(test)]
+#[test_log::test]
 fn test_remove_dependencies() {
     let manifest = PathBuf::from(TOP_LEVEL).join("./integration-tests/multi-key-dep/Cargo.toml");
     let stripped_manifest = remove_dependencies(
