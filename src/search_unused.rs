@@ -433,6 +433,84 @@ fn get_full_manifest(
     ))
 }
 
+/// Check if a package should be ignored based on parent package ignored-dirs settings
+pub(crate) fn is_package_ignored_by_parent(package_path: &Path) -> bool {
+    let package_dir = package_path.parent().unwrap_or(package_path);
+    let mut current_path = package_dir;
+
+    debug!(
+        "Checking if package {} should be ignored by parent",
+        package_dir.display()
+    );
+
+    while let Some(parent) = current_path.parent() {
+        current_path = parent;
+
+        let parent_cargo_toml = parent.join("Cargo.toml");
+        debug!(
+            "Checking parent directory: {} (cargo.toml exists: {})",
+            parent.display(),
+            parent_cargo_toml.exists()
+        );
+
+        if parent_cargo_toml.exists() && parent != package_dir {
+            // Found a parent package, check its ignored-dirs
+            debug!(
+                "Found parent package manifest at: {}",
+                parent_cargo_toml.display()
+            );
+
+            // Try to read the TOML file directly and look for ignored-dirs
+            let Ok(content) = std::fs::read_to_string(&parent_cargo_toml).inspect_err(|err| {
+                debug!("Failed to read parent manifest file: {err}");
+            }) else {
+                continue;
+            };
+
+            let Ok(doc) = content
+                .parse::<toml_edit::DocumentMut>()
+                .inspect_err(|err| {
+                    debug!("Failed to parse parent TOML: {err}");
+                })
+            else {
+                continue;
+            };
+
+            let Some(ignored_dirs) = doc.get("package").and_then(|p| {
+                p.get("metadata")?
+                    .get("cargo-machete")?
+                    .get("ignored-dirs")?
+                    .as_array()
+            }) else {
+                debug!("Parent package has no cargo-machete ignored-dirs");
+                continue;
+            };
+
+            let ignored_dirs = ignored_dirs
+                .iter()
+                .map(|dir| dir.as_str().unwrap().into())
+                .collect::<HashSet<PathBuf>>();
+
+            let glob_set = build_ignored_dirs_globset(&ignored_dirs).unwrap_or_else(|err| {
+                warn!("Failed to build package ignored dirs globset: {}", err);
+                globset::GlobSet::empty()
+            });
+
+            debug!("Parent package has {} ignored-dirs", ignored_dirs.len());
+            if is_dir_ignored(package_dir, parent, &glob_set, None) {
+                debug!("Package {} is ignored by parent", package_dir.display());
+                return true;
+            }
+        }
+    }
+
+    debug!(
+        "Package {} is NOT ignored by any parent",
+        package_dir.display()
+    );
+    false
+}
+
 struct GlobIgnoredDirs {
     dir_path: PathBuf,
     package_globset: globset::GlobSet,

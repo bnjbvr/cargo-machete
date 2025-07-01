@@ -92,7 +92,7 @@ fn collect_paths(path: &Path, options: CollectPathOptions) -> Result<Vec<PathBuf
 
     // Keep only errors and `Cargo.toml` files (filter), then map correct paths into owned
     // `PathBuf`.
-    walker
+    let mut paths = walker
         .into_iter()
         .filter(|entry| {
             entry
@@ -100,7 +100,22 @@ fn collect_paths(path: &Path, options: CollectPathOptions) -> Result<Vec<PathBuf
                 .map_or(true, |entry| entry.file_name() == "Cargo.toml")
         })
         .map(|res_entry| res_entry.map(|e| e.into_path()))
-        .collect()
+        .collect::<Result<Vec<_>, _>>()?;
+
+    // Filter out packages that are ignored by their parent packages
+    paths.retain(|manifest_path| {
+        if crate::search_unused::is_package_ignored_by_parent(manifest_path) {
+            log::debug!(
+                "Skipping package {} because it's ignored by a parent package",
+                manifest_path.display()
+            );
+            false
+        } else {
+            true
+        }
+    });
+
+    Ok(paths)
 }
 
 /// Return true if this is run as `cargo machete`, false otherwise (`cargo-machete`, `cargo run -- ...`)
