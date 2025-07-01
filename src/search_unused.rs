@@ -12,6 +12,7 @@ use std::{
     collections::{BTreeMap, HashSet},
     error::{self, Error},
     path::{Path, PathBuf},
+    sync::{LazyLock, Mutex},
 };
 use walkdir::WalkDir;
 
@@ -27,13 +28,13 @@ mod meta {
 
     use serde::{Deserialize, Serialize};
 
-    #[derive(Serialize, Deserialize)]
+    #[derive(Debug, Clone, Serialize, Deserialize)]
     pub struct PackageMetadata {
         #[serde(rename = "cargo-machete")]
         pub cargo_machete: Option<MetadataFields>,
     }
 
-    #[derive(Serialize, Deserialize)]
+    #[derive(Debug, Clone, Serialize, Deserialize)]
     #[serde(rename_all = "kebab-case")]
     pub struct MetadataFields {
         /// Crates triggering false positives in `cargo-machete`, which should not be reported as
@@ -377,7 +378,10 @@ fn get_workspace_manifest_path(dir_path: &Path) -> Option<PathBuf> {
     });
     let mut path: &Path = &path;
     while let Some(parent) = path.parent() {
+        path = parent;
+
         let workspace_cargo_path = parent.join("Cargo.toml");
+
         if let Ok(workspace_manifest) =
             cargo_toml::Manifest::<PackageMetadata>::from_path_with_metadata(&workspace_cargo_path)
         {
@@ -385,51 +389,85 @@ fn get_workspace_manifest_path(dir_path: &Path) -> Option<PathBuf> {
                 return Some(workspace_cargo_path);
             }
         }
-        path = parent;
     }
     None
 }
 
+static MANIFEST_CACHE: LazyLock<
+    Mutex<std::collections::HashMap<PathBuf, cargo_toml::Manifest<PackageMetadata>>>,
+> = LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
+
+fn search_cached_manifest(
+    manifest_path: &Path,
+    workspace_manifest_path: Option<&Path>,
+) -> Option<(
+    cargo_toml::Manifest<PackageMetadata>,
+    Option<cargo_toml::Manifest<PackageMetadata>>,
+)> {
+    let cache = MANIFEST_CACHE.lock().unwrap();
+
+    if let Some(manifest) = cache.get(manifest_path).cloned() {
+        let workspace_manifest = workspace_manifest_path.and_then(|x| cache.get(x)).cloned();
+        return Some((manifest, workspace_manifest));
+    }
+
+    None
+}
+
+/// Read a manifest and try to find a workspace manifest.
+///
+/// This will first look in the cache and if not found, will eagerly load the manifest and save
+/// it to the cache. It will look up the file tree to find the Cargo.toml workspace manifest,
+/// assuming it's on a parent directory.
+fn get_full_manifest(
+    manifest_path: &Path,
+    workspace_manifest_path: Option<&Path>,
+) -> anyhow::Result<(
+    cargo_toml::Manifest<PackageMetadata>,
+    Option<cargo_toml::Manifest<PackageMetadata>>,
+)> {
+    let manifest_path = manifest_path.canonicalize()?;
+
+    if let Some(cached) = search_cached_manifest(&manifest_path, workspace_manifest_path) {
+        return Ok(cached);
+    }
+
+    let mut manifest =
+        cargo_toml::Manifest::<PackageMetadata>::from_path_with_metadata(&manifest_path)?;
+
+    let workspace_manifest = workspace_manifest_path
+        .map(|path| get_full_manifest(path, None))
+        .transpose()?
+        .map(|(manifest, _)| manifest);
+
+    manifest.complete_from_path_and_workspace(
+        &manifest_path,
+        workspace_manifest.as_ref().zip(workspace_manifest_path),
+    )?;
+
+    MANIFEST_CACHE
+        .lock()
+        .unwrap()
+        .insert(manifest_path.to_path_buf(), manifest.clone());
+
+    Ok((manifest, workspace_manifest))
+}
+
 /// Read a manifest and try to find a workspace manifest to complete the data available in the
 /// manifest.
-///
-/// This will look up the file tree to find the Cargo.toml workspace manifest, assuming it's on a
-/// parent directory.
-fn get_full_manifest(
+fn get_full_manifest_with_metadata(
     manifest_path: &Path,
     workspace_manifest_path: Option<&Path>,
 ) -> anyhow::Result<(
     cargo_toml::Manifest<PackageMetadata>,
     Option<meta::MetadataFields>,
 )> {
-    // HACK: we can't plain use `from_path_with_metadata` here, because it calls
-    // `complete_from_path` just a bit too early (before we've had a chance to call
-    // `inherit_workspace`). See https://gitlab.com/crates.rs/cargo_toml/-/issues/20 for details,
-    // and a possible future fix.
-    let cargo_toml_content = std::fs::read(manifest_path)?;
-    let mut manifest =
-        cargo_toml::Manifest::<PackageMetadata>::from_slice_with_metadata(&cargo_toml_content)?;
-
-    let ws_manifest_and_path = workspace_manifest_path.and_then(|path| {
-        if let Ok(workspace_manifest) =
-            cargo_toml::Manifest::<PackageMetadata>::from_path_with_metadata(path)
-        {
-            return Some((workspace_manifest, path));
-        }
-
-        None
-    });
-
-    manifest.complete_from_path_and_workspace(
-        manifest_path,
-        ws_manifest_and_path.as_ref().map(|(m, p)| (m, *p)),
-    )?;
+    let (manifest, workspace_manifest) = get_full_manifest(manifest_path, workspace_manifest_path)?;
 
     Ok((
         manifest,
         // Look for `workspace.metadata.cargo-machete` custom metadata in the workspace Cargo.toml.
-        ws_manifest_and_path
-            .and_then(|(manifest, _path)| manifest.workspace?.metadata?.cargo_machete),
+        workspace_manifest.and_then(|x| x.workspace?.metadata?.cargo_machete),
     ))
 }
 
@@ -572,7 +610,8 @@ pub(crate) fn find_unused(
 
     let workspace_manifest_path = get_workspace_manifest_path(&dir_path);
     let workspace_manifest_path = workspace_manifest_path.as_deref();
-    let (manifest, workspace_metadata) = get_full_manifest(manifest_path, workspace_manifest_path)?;
+    let (manifest, workspace_metadata) =
+        get_full_manifest_with_metadata(manifest_path, workspace_manifest_path)?;
 
     let package_name = match manifest.package {
         Some(ref package) => package.name.clone(),
