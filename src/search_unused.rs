@@ -194,13 +194,10 @@ fn is_dir_ignored(path: &Path, base_path: &Path, globset: &GlobSet) -> bool {
 }
 
 /// Returns all the paths to the Rust source files for a crate contained at the given path.
-fn collect_paths(
-    workspace_manifest_path: Option<&Path>,
-    dir_path: &Path,
-    analysis: &PackageAnalysis,
-    ignored_dirs: &BTreeSet<PathBuf>,
-    workspace_ignored_dirs: &BTreeSet<PathBuf>,
-) -> Vec<PathBuf> {
+fn collect_paths(manifest_path: &Path, analysis: &PackageAnalysis) -> anyhow::Result<Vec<PathBuf>> {
+    let dir_path = manifest_path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("bad path"))?;
     let mut root_paths = BTreeSet::new();
 
     if let Some(path) = analysis
@@ -247,14 +244,7 @@ fn collect_paths(
         trace!("adding src/ since paths was empty");
     }
 
-    let glob_ignored_dirs = GlobIgnoredDirs::new(
-        dir_path.to_path_buf(),
-        ignored_dirs,
-        workspace_ignored_dirs,
-        workspace_manifest_path
-            .and_then(Path::parent)
-            .map(PathBuf::from),
-    );
+    let glob_ignored_dirs = GlobIgnoredDirs::try_from(manifest_path)?;
 
     // Collect all final paths for the crate first.
     let paths: Vec<PathBuf> = root_paths
@@ -292,7 +282,7 @@ fn collect_paths(
 
     trace!("found transitive paths: {paths:?}");
 
-    paths
+    Ok(paths)
 }
 
 /// Performs search of the given crate name with the following strategy: first try to use the line
@@ -720,37 +710,15 @@ pub(crate) fn find_unused(
         .as_ref()
         .and_then(|package| package.metadata.as_ref()?.cargo_machete.as_ref());
 
-    let ignored_dirs = meta
-        .map(|meta| meta.ignored_dirs.iter().cloned().collect::<BTreeSet<_>>())
-        .unwrap_or_default();
-
-    let (workspace_ignored_dirs, workspace_ignored, workspace_renamed): (
-        BTreeSet<PathBuf>,
-        BTreeSet<_>,
-        _,
-    ) = workspace_metadata
+    let (workspace_ignored, workspace_renamed) = workspace_metadata
         .map(
             |MetadataFields {
-                 ignored_dirs,
-                 ignored,
-                 renamed,
-             }| {
-                (
-                    BTreeSet::from_iter(ignored_dirs),
-                    BTreeSet::from_iter(ignored),
-                    renamed,
-                )
-            },
+                 ignored, renamed, ..
+             }| { (BTreeSet::from_iter(ignored), renamed) },
         )
         .unwrap_or_default();
 
-    let paths = collect_paths(
-        workspace_manifest_path,
-        &dir_path,
-        &analysis,
-        &ignored_dirs,
-        &workspace_ignored_dirs,
-    );
+    let paths = collect_paths(manifest_path, &analysis)?;
 
     // TODO extend to dev dependencies + build dependencies, and be smarter in the grouping of
     // searched paths
@@ -843,14 +811,7 @@ pub(crate) fn find_unused(
         IgnoredButUsed(String),
     }
 
-    let glob_ignored_dirs = GlobIgnoredDirs::new(
-        dir_path.to_path_buf(),
-        &ignored_dirs,
-        &workspace_ignored_dirs,
-        workspace_manifest_path
-            .and_then(Path::parent)
-            .map(PathBuf::from),
-    );
+    let glob_ignored_dirs = GlobIgnoredDirs::try_from(manifest_path)?;
 
     let results: Vec<SingleDepResult> = dependencies
         .into_par_iter()
