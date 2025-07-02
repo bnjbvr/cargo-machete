@@ -9,7 +9,7 @@ use log::{debug, trace, warn};
 use meta::MetadataFields;
 use rayon::prelude::*;
 use std::{
-    collections::{BTreeMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     error::{self, Error},
     path::{Path, PathBuf},
     sync::{LazyLock, Mutex},
@@ -55,6 +55,7 @@ mod meta {
     }
 }
 
+#[derive(Debug)]
 pub(crate) struct PackageAnalysis {
     metadata: Option<cargo_metadata::Metadata>,
     pub manifest: cargo_toml::Manifest<meta::PackageMetadata>,
@@ -155,21 +156,33 @@ fn is_dir_ignored(
 ) -> bool {
     let relative_path = path.strip_prefix(dir_path).unwrap_or(path);
     let relative_path_str = relative_path.to_string_lossy().replace('\\', "/");
+    trace!(
+        "checking if {relative_path_str} should be ignored relative to {}",
+        dir_path.display()
+    );
 
     // Check the path itself first
     if globset.is_match(&relative_path_str) {
-        trace!("is_ignored: {path:?} is_match: true (exact match)");
+        trace!(
+            "is_dir_ignored: exactly matched {path}",
+            path = path.display()
+        );
         return true;
     }
 
     // Check all parent directories of the path up to the dir_path and/or workspace directory
     let mut current_path = relative_path;
+
     while let Some(parent) = current_path.parent() {
         let parent_str = parent.to_string_lossy().replace('\\', "/");
+        trace!(
+            "checking if {parent_str} should be ignored relative to {} ({relative_path_str})",
+            dir_path.display()
+        );
         if globset.is_match(&parent_str) {
             trace!(
-                "is_ignored: {path:?} is_match: true (parent match: {})",
-                parent_str
+                "is_dir_ignored: parent matched {path}",
+                path = path.display(),
             );
             return true;
         } else if parent == dir_path || workspace_dir.is_some_and(|p| parent == p) {
@@ -178,7 +191,10 @@ fn is_dir_ignored(
         current_path = parent;
     }
 
-    trace!("is_ignored: {path:?} is_match: false");
+    trace!(
+        "is_dir_ignored: {path} is_match=false",
+        path = path.display()
+    );
     false
 }
 
@@ -471,13 +487,24 @@ fn get_full_manifest_with_metadata(
     ))
 }
 
-/// Check if a package should be ignored based on parent package ignored-dirs settings
-pub(crate) fn is_package_ignored_by_parent(package_path: &Path) -> bool {
-    let package_dir = package_path.parent().unwrap_or(package_path);
+/// Check if a package should be ignored based on parent package & workspace ignored-dirs settings
+pub(crate) fn is_package_ignored_by_parent(package_path: &Path) -> anyhow::Result<bool> {
+    let Ok(package_path) = package_path.canonicalize() else {
+        warn!("failed to canonicalize path: {package_path:?}");
+        return Ok(false);
+    };
+
+    debug!(
+        "Checking if package package_path={} should be ignored by parent",
+        package_path.display()
+    );
+    let package_dir = package_path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("package path {} has no parent", package_path.display()))?;
     let mut current_path = package_dir;
 
     debug!(
-        "Checking if package {} should be ignored by parent",
+        "Checking if package package_dir={} should be ignored by parent",
         package_dir.display()
     );
 
@@ -485,60 +512,41 @@ pub(crate) fn is_package_ignored_by_parent(package_path: &Path) -> bool {
         current_path = parent;
 
         let parent_cargo_toml = parent.join("Cargo.toml");
+
         debug!(
             "Checking parent directory: {} (cargo.toml exists: {})",
             parent.display(),
             parent_cargo_toml.exists()
         );
 
-        if parent_cargo_toml.exists() && parent != package_dir {
-            // Found a parent package, check its ignored-dirs
+        if !parent_cargo_toml.exists() {
+            continue;
+        }
+
+        debug!(
+            "Found parent package manifest at: {}",
+            parent_cargo_toml.display()
+        );
+
+        trace!(
+            "creating glob {} should be ignored by parent",
+            parent_cargo_toml.display()
+        );
+        let mut glob_ignored_dirs = GlobIgnoredDirs::try_from(parent_cargo_toml)?;
+        glob_ignored_dirs.dir_path = parent.to_path_buf();
+
+        if is_dir_ignored(
+            package_dir,
+            parent,
+            &glob_ignored_dirs.package_globset,
+            None,
+        ) {
+            // if glob_ignored_dirs.is_ignored(package_dir) {
             debug!(
-                "Found parent package manifest at: {}",
-                parent_cargo_toml.display()
+                "Package {} is ignored by parent dirs",
+                package_dir.display()
             );
-
-            // Try to read the TOML file directly and look for ignored-dirs
-            let Ok(content) = std::fs::read_to_string(&parent_cargo_toml).inspect_err(|err| {
-                debug!("Failed to read parent manifest file: {err}");
-            }) else {
-                continue;
-            };
-
-            let Ok(doc) = content
-                .parse::<toml_edit::DocumentMut>()
-                .inspect_err(|err| {
-                    debug!("Failed to parse parent TOML: {err}");
-                })
-            else {
-                continue;
-            };
-
-            let Some(ignored_dirs) = doc.get("package").and_then(|p| {
-                p.get("metadata")?
-                    .get("cargo-machete")?
-                    .get("ignored-dirs")?
-                    .as_array()
-            }) else {
-                debug!("Parent package has no cargo-machete ignored-dirs");
-                continue;
-            };
-
-            let ignored_dirs = ignored_dirs
-                .iter()
-                .map(|dir| dir.as_str().unwrap().into())
-                .collect::<HashSet<PathBuf>>();
-
-            let glob_set = build_ignored_dirs_globset(&ignored_dirs).unwrap_or_else(|err| {
-                warn!("Failed to build package ignored dirs globset: {}", err);
-                globset::GlobSet::empty()
-            });
-
-            debug!("Parent package has {} ignored-dirs", ignored_dirs.len());
-            if is_dir_ignored(package_dir, parent, &glob_set, None) {
-                debug!("Package {} is ignored by parent", package_dir.display());
-                return true;
-            }
+            return Ok(true);
         }
     }
 
@@ -546,9 +554,15 @@ pub(crate) fn is_package_ignored_by_parent(package_path: &Path) -> bool {
         "Package {} is NOT ignored by any parent",
         package_dir.display()
     );
-    false
+    Ok(false)
 }
 
+type GlobIgnoredDirsCache = HashMap<PathBuf, HashMap<Option<PathBuf>, GlobIgnoredDirs>>;
+
+static GLOB_IGNORED_DIRS_CACHE: LazyLock<Mutex<GlobIgnoredDirsCache>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+#[derive(Debug, Clone)]
 struct GlobIgnoredDirs {
     dir_path: PathBuf,
     package_globset: globset::GlobSet,
@@ -557,6 +571,15 @@ struct GlobIgnoredDirs {
 }
 
 impl GlobIgnoredDirs {
+    fn get_from_cache(dir_path: &Path, workspace_dir: Option<PathBuf>) -> Option<Self> {
+        GLOB_IGNORED_DIRS_CACHE
+            .lock()
+            .unwrap()
+            .get(dir_path)?
+            .get(&workspace_dir)
+            .cloned()
+    }
+
     fn new(
         dir_path: PathBuf,
         ignored_dirs: &HashSet<PathBuf>,
@@ -573,20 +596,32 @@ impl GlobIgnoredDirs {
                 globset::GlobSet::empty()
             });
 
-        Self {
-            dir_path,
+        let value = Self {
+            dir_path: dir_path.clone(),
             package_globset,
             workspace_globset,
-            workspace_dir,
-        }
+            workspace_dir: workspace_dir.clone(),
+        };
+
+        let mut cache = GLOB_IGNORED_DIRS_CACHE.lock().unwrap();
+        cache
+            .entry(dir_path.to_path_buf())
+            .or_default()
+            .insert(workspace_dir, value.clone());
+
+        value
     }
 
     fn is_ignored(&self, path: &Path) -> bool {
+        let Ok(path) = path.canonicalize() else {
+            warn!("failed to canonicalize path: {path:?}");
+            return false;
+        };
         let workspace_dir = self.workspace_dir.as_deref();
 
         if let Some(workspace_dir) = workspace_dir {
             if is_dir_ignored(
-                path,
+                &path,
                 workspace_dir,
                 &self.workspace_globset,
                 Some(workspace_dir),
@@ -595,7 +630,75 @@ impl GlobIgnoredDirs {
             }
         }
 
-        is_dir_ignored(path, &self.dir_path, &self.package_globset, workspace_dir)
+        is_dir_ignored(&path, &self.dir_path, &self.package_globset, workspace_dir)
+    }
+}
+
+impl TryFrom<PathBuf> for GlobIgnoredDirs {
+    type Error = anyhow::Error;
+
+    fn try_from(cargo_toml: PathBuf) -> Result<Self, Self::Error> {
+        cargo_toml.as_path().try_into()
+    }
+}
+
+impl TryFrom<&PathBuf> for GlobIgnoredDirs {
+    type Error = anyhow::Error;
+
+    fn try_from(cargo_toml: &PathBuf) -> Result<Self, Self::Error> {
+        cargo_toml.as_path().try_into()
+    }
+}
+
+impl TryFrom<&Path> for GlobIgnoredDirs {
+    type Error = anyhow::Error;
+
+    fn try_from(cargo_toml: &Path) -> Result<Self, Self::Error> {
+        let cargo_toml = cargo_toml.canonicalize()?;
+
+        let mut dir_path = cargo_toml.clone();
+        dir_path.pop();
+
+        let workspace_manifest_path = get_workspace_manifest_path(&dir_path);
+        let workspace_manifest_path = workspace_manifest_path.as_deref();
+        let workspace_dir = workspace_manifest_path
+            .and_then(Path::parent)
+            .map(Path::to_path_buf);
+
+        if let Some(cached) = Self::get_from_cache(&dir_path, workspace_dir) {
+            return Ok(cached);
+        }
+
+        let (package_manifest, workspace_metadata) =
+            get_full_manifest_with_metadata(&cargo_toml, workspace_manifest_path)?;
+
+        let ignored_dirs =
+            if let Some(package_metadata) = package_manifest.package.and_then(|x| x.metadata) {
+                trace!("found parent package metadata: {package_metadata:?}");
+
+                package_metadata
+                    .cargo_machete
+                    .map(|x| x.ignored_dirs.iter().cloned().collect::<HashSet<_>>())
+                    .unwrap_or_default()
+            } else {
+                HashSet::new()
+            };
+
+        let workspace_ignored_dirs = workspace_metadata
+            .inspect(|metadata| {
+                trace!("found workspace package metadata: {metadata:?}");
+            })
+            .map(|x| x.ignored_dirs.iter().cloned().collect::<HashSet<_>>())
+            .unwrap_or_default();
+
+        Ok(Self::new(
+            dir_path,
+            &ignored_dirs,
+            &workspace_ignored_dirs,
+            workspace_manifest_path
+                .and_then(Path::parent)
+                .map(PathBuf::from),
+        ))
     }
 }
 

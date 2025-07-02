@@ -1,0 +1,6 @@
+[workspace]
+members = ["./inner", "./inner/nested"]
+
+[workspace.dependencies]
+log = "0.4.14"
+serde = "1"

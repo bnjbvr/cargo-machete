@@ -106,7 +106,7 @@ fn collect_paths(path: &Path, options: CollectPathOptions) -> Result<Vec<PathBuf
 
     // Filter out packages that are ignored by their parent packages
     paths.retain(|manifest_path| {
-        if crate::search_unused::is_package_ignored_by_parent(manifest_path) {
+        if crate::search_unused::is_package_ignored_by_parent(manifest_path).unwrap_or(false) {
             log::debug!(
                 "Skipping package {} because it's ignored by a parent package",
                 manifest_path.display()
@@ -231,6 +231,7 @@ fn run_machete_with_args(mut args: MacheteArgs) -> anyhow::Result<bool> {
     Ok(has_unused_dependencies)
 }
 
+#[derive(Debug)]
 struct PathAnalysisResult {
     path: PathBuf,
     analysis: Vec<(PackageAnalysis, PathBuf)>,
@@ -486,7 +487,43 @@ fn test_ignore_dirs_workspace_nested_works() {
     let path_analysis_result = path_analysis_results.into_iter().next().unwrap();
 
     let analysis = path_analysis_result.analysis;
-    assert_eq!(analysis.len(), 1);
+    assert_eq!(
+        analysis.len(),
+        1,
+        "expected 1 analysis, got {len} {analysis:#?}",
+        len = analysis.len()
+    );
+    let (analysis, analysis_path) = analysis.into_iter().next().unwrap();
+    assert_eq!(analysis_path, path.join("inner/Cargo.toml"));
+    assert_eq!(analysis.unused, &["grep".to_string()]);
+    assert!(analysis.ignored_used.is_empty());
+}
+
+#[cfg(test)]
+#[test_log::test]
+fn test_ignore_dirs_workspace_nested_deep_works() {
+    let path: PathBuf = "./integration-tests/ignored-dirs-workspace-nested-deep".into();
+
+    let path_analysis_results = run_machete_analysis(MacheteArgs {
+        with_metadata: false,
+        skip_target_dir: false,
+        fix: false,
+        no_ignore: false,
+        version: false,
+        paths: vec![path.clone()],
+    })
+    .unwrap();
+
+    assert_eq!(path_analysis_results.len(), 1);
+    let path_analysis_result = path_analysis_results.into_iter().next().unwrap();
+
+    let analysis = path_analysis_result.analysis;
+    assert_eq!(
+        analysis.len(),
+        1,
+        "expected 1 analysis, got {len} {analysis:#?}",
+        len = analysis.len()
+    );
     let (analysis, analysis_path) = analysis.into_iter().next().unwrap();
     assert_eq!(analysis_path, path.join("inner/Cargo.toml"));
     assert_eq!(analysis.unused, &["grep".to_string()]);
