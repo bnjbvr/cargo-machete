@@ -372,7 +372,7 @@ impl Search {
 
 fn get_workspace_manifest_path(dir_path: &Path) -> Option<PathBuf> {
     // Canonicalize the path, so as to get the full "parenthood" of relative paths.
-    let path = std::fs::canonicalize(dir_path).unwrap_or_else(|err| {
+    let path = dir_path.canonicalize().unwrap_or_else(|err| {
         warn!("error when canonicalizing dir_path: {err}");
         dir_path.to_owned()
     });
