@@ -285,9 +285,9 @@ fn run_machete_analysis(mut args: MacheteArgs) -> anyhow::Result<Vec<PathAnalysi
         // Run analysis in parallel. This will spawn new rayon tasks when dependencies are effectively
         // used by any Rust crate.
         let analyses = manifest_path_entries
-            .par_iter()
+            .into_par_iter()
             .filter_map(
-                |manifest_path| match find_unused(manifest_path, with_metadata) {
+                |manifest_path| match find_unused(&manifest_path, with_metadata) {
                     Ok(Some(analysis)) => {
                         if analysis.unused.is_empty() {
                             None
@@ -310,7 +310,6 @@ fn run_machete_analysis(mut args: MacheteArgs) -> anyhow::Result<Vec<PathAnalysi
                     }
                 },
             )
-            .map(|(analysis, manifest_path)| (analysis, manifest_path.clone()))
             .collect::<Vec<_>>();
 
         analysis_results.push(PathAnalysisResult { path, analyses });
