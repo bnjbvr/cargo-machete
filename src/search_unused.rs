@@ -512,11 +512,9 @@ pub(crate) fn is_package_ignored_by_parent(package_path: &Path) -> anyhow::Resul
             parent_cargo_toml.display()
         );
 
-        let mut glob_ignored_dirs = GlobIgnoredDirs::try_from(parent_cargo_toml)?;
-        glob_ignored_dirs.dir_path = parent.to_path_buf();
+        let glob_ignored_dirs = GlobIgnoredDirs::try_from(parent_cargo_toml)?;
 
-        if is_dir_ignored(package_dir, parent, &glob_ignored_dirs.package_globset) {
-            // if glob_ignored_dirs.is_ignored(package_dir) {
+        if glob_ignored_dirs.is_ignored(package_dir) {
             debug!(
                 "Package {} is ignored by parent dirs",
                 package_dir.display()
