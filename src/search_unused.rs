@@ -406,12 +406,10 @@ fn search_cached_manifest(
 )> {
     let cache = MANIFEST_CACHE.lock().unwrap();
 
-    if let Some(manifest) = cache.get(manifest_path).cloned() {
+    cache.get(manifest_path).cloned().map(|manifest| {
         let workspace_manifest = workspace_manifest_path.and_then(|x| cache.get(x)).cloned();
-        return Some((manifest, workspace_manifest));
-    }
-
-    None
+        (manifest, workspace_manifest)
+    })
 }
 
 /// Read a manifest and try to find a workspace manifest.
