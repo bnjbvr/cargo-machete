@@ -140,9 +140,7 @@ fn build_ignored_dirs_globset(ignored_dirs: &HashSet<PathBuf>) -> anyhow::Result
     let mut builder = GlobSetBuilder::new();
 
     for ignored_dir in ignored_dirs {
-        let normalized_ignored = ignored_dir.to_string_lossy().replace('\\', "/");
-
-        builder.add(Glob::new(&normalized_ignored)?);
+        builder.add(Glob::new(&ignored_dir.to_string_lossy())?);
     }
 
     Ok(builder.build()?)
@@ -155,14 +153,14 @@ fn is_dir_ignored(
     workspace_dir: Option<&Path>,
 ) -> bool {
     let relative_path = path.strip_prefix(dir_path).unwrap_or(path);
-    let relative_path_str = relative_path.to_string_lossy().replace('\\', "/");
+    let relative_path_str = relative_path.to_string_lossy();
     trace!(
         "checking if {relative_path_str} should be ignored relative to {}",
         dir_path.display()
     );
 
     // Check the path itself first
-    if globset.is_match(&relative_path_str) {
+    if globset.is_match(&*relative_path_str) {
         trace!(
             "is_dir_ignored: exactly matched {path}",
             path = path.display()
@@ -174,12 +172,12 @@ fn is_dir_ignored(
     let mut current_path = relative_path;
 
     while let Some(parent) = current_path.parent() {
-        let parent_str = parent.to_string_lossy().replace('\\', "/");
+        let parent_str = parent.to_string_lossy();
         trace!(
             "checking if {parent_str} should be ignored relative to {} ({relative_path_str})",
             dir_path.display()
         );
-        if globset.is_match(&parent_str) {
+        if globset.is_match(&*parent_str) {
             trace!(
                 "is_dir_ignored: parent matched {path}",
                 path = path.display(),
@@ -1495,29 +1493,6 @@ fn test_ignore_dirs_nested_works() {
                 "tokio".to_string(),
                 "uuid".to_string(),
                 "rand".to_string(),
-            ];
-            expected_unused.sort();
-            let mut actual_unused = analysis.unused.clone();
-            actual_unused.sort();
-            assert_eq!(actual_unused, expected_unused);
-            assert!(analysis.ignored_used.is_empty());
-        },
-    );
-}
-
-#[cfg(test)]
-#[test_log::test]
-fn test_ignore_dirs_cross_platform_paths() {
-    check_analysis(
-        "./integration-tests/ignored-dirs-cross-platform/Cargo.toml",
-        |analysis| {
-            // Should report regex as unused (not used anywhere)
-            // Should NOT report log as unused (used in main.rs)
-            // Should report serde and tokio as unused (used only in ignored path dirs)
-            let mut expected_unused = vec![
-                "regex".to_string(),
-                "serde".to_string(),
-                "tokio".to_string(),
             ];
             expected_unused.sort();
             let mut actual_unused = analysis.unused.clone();
