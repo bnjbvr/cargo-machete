@@ -148,17 +148,12 @@ fn build_ignored_dirs_globset(
     Ok(builder.build()?)
 }
 
-fn is_dir_ignored(
-    path: &Path,
-    dir_path: &Path,
-    globset: &GlobSet,
-    workspace_dir: Option<&Path>,
-) -> bool {
-    let relative_path = path.strip_prefix(dir_path).unwrap_or(path);
+fn is_dir_ignored(path: &Path, base_path: &Path, globset: &GlobSet) -> bool {
+    let relative_path = path.strip_prefix(base_path).unwrap_or(path);
     let relative_path_str = relative_path.to_string_lossy();
     trace!(
         "checking if {relative_path_str} should be ignored relative to {}",
-        dir_path.display()
+        base_path.display()
     );
 
     // Check the path itself first
@@ -177,7 +172,7 @@ fn is_dir_ignored(
         let parent_str = parent.to_string_lossy();
         trace!(
             "checking if {parent_str} should be ignored relative to {} ({relative_path_str})",
-            dir_path.display()
+            base_path.display()
         );
         if globset.is_match(&*parent_str) {
             trace!(
@@ -185,7 +180,7 @@ fn is_dir_ignored(
                 path = path.display(),
             );
             return true;
-        } else if parent == dir_path || workspace_dir.is_some_and(|p| parent == p) {
+        } else if parent == base_path {
             break;
         }
         current_path = parent;
@@ -534,12 +529,7 @@ pub(crate) fn is_package_ignored_by_parent(package_path: &Path) -> anyhow::Resul
         let mut glob_ignored_dirs = GlobIgnoredDirs::try_from(parent_cargo_toml)?;
         glob_ignored_dirs.dir_path = parent.to_path_buf();
 
-        if is_dir_ignored(
-            package_dir,
-            parent,
-            &glob_ignored_dirs.package_globset,
-            None,
-        ) {
+        if is_dir_ignored(package_dir, parent, &glob_ignored_dirs.package_globset) {
             // if glob_ignored_dirs.is_ignored(package_dir) {
             debug!(
                 "Package {} is ignored by parent dirs",
@@ -619,17 +609,12 @@ impl GlobIgnoredDirs {
         let workspace_dir = self.workspace_dir.as_deref();
 
         if let Some(workspace_dir) = workspace_dir {
-            if is_dir_ignored(
-                &path,
-                workspace_dir,
-                &self.workspace_globset,
-                Some(workspace_dir),
-            ) {
+            if is_dir_ignored(&path, workspace_dir, &self.workspace_globset) {
                 return true;
             }
         }
 
-        is_dir_ignored(&path, &self.dir_path, &self.package_globset, workspace_dir)
+        is_dir_ignored(&path, &self.dir_path, &self.package_globset)
     }
 }
 
@@ -1553,7 +1538,7 @@ fn test_ignore_dirs_parent_matching_flexibility() {
         ignored_dirs.insert(PathBuf::from(pattern));
 
         let globset = build_ignored_dirs_globset(&ignored_dirs).unwrap();
-        let result = is_dir_ignored(Path::new(test_path), Path::new(""), &globset, None);
+        let result = is_dir_ignored(Path::new(test_path), Path::new(""), &globset);
 
         assert_eq!(
             result, expected,
