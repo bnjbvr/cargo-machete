@@ -9,7 +9,7 @@ use log::{debug, trace, warn};
 use meta::MetadataFields;
 use rayon::prelude::*;
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{BTreeMap, BTreeSet},
     error::{self, Error},
     path::{Path, PathBuf},
     sync::{LazyLock, Mutex},
@@ -136,7 +136,9 @@ fn make_multiline_regexp(name: &str) -> String {
 }
 
 /// Build a globset from the ignored directories
-fn build_ignored_dirs_globset(ignored_dirs: &HashSet<PathBuf>) -> anyhow::Result<globset::GlobSet> {
+fn build_ignored_dirs_globset(
+    ignored_dirs: &BTreeSet<PathBuf>,
+) -> anyhow::Result<globset::GlobSet> {
     let mut builder = GlobSetBuilder::new();
 
     for ignored_dir in ignored_dirs {
@@ -201,10 +203,10 @@ fn collect_paths(
     workspace_manifest_path: Option<&Path>,
     dir_path: &Path,
     analysis: &PackageAnalysis,
-    ignored_dirs: &HashSet<PathBuf>,
-    workspace_ignored_dirs: &HashSet<PathBuf>,
+    ignored_dirs: &BTreeSet<PathBuf>,
+    workspace_ignored_dirs: &BTreeSet<PathBuf>,
 ) -> Vec<PathBuf> {
-    let mut root_paths = HashSet::new();
+    let mut root_paths = BTreeSet::new();
 
     if let Some(path) = analysis
         .manifest
@@ -407,9 +409,8 @@ fn get_workspace_manifest_path(dir_path: &Path) -> Option<PathBuf> {
     None
 }
 
-static MANIFEST_CACHE: LazyLock<
-    Mutex<std::collections::HashMap<PathBuf, cargo_toml::Manifest<PackageMetadata>>>,
-> = LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
+static MANIFEST_CACHE: LazyLock<Mutex<BTreeMap<PathBuf, cargo_toml::Manifest<PackageMetadata>>>> =
+    LazyLock::new(|| Mutex::new(BTreeMap::new()));
 
 fn search_cached_manifest(
     manifest_path: &Path,
@@ -555,10 +556,10 @@ pub(crate) fn is_package_ignored_by_parent(package_path: &Path) -> anyhow::Resul
     Ok(false)
 }
 
-type GlobIgnoredDirsCache = HashMap<PathBuf, HashMap<Option<PathBuf>, GlobIgnoredDirs>>;
+type GlobIgnoredDirsCache = BTreeMap<PathBuf, BTreeMap<Option<PathBuf>, GlobIgnoredDirs>>;
 
 static GLOB_IGNORED_DIRS_CACHE: LazyLock<Mutex<GlobIgnoredDirsCache>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
+    LazyLock::new(|| Mutex::new(BTreeMap::new()));
 
 #[derive(Debug, Clone)]
 struct GlobIgnoredDirs {
@@ -580,8 +581,8 @@ impl GlobIgnoredDirs {
 
     fn new(
         dir_path: PathBuf,
-        ignored_dirs: &HashSet<PathBuf>,
-        workspace_ignored_dirs: &HashSet<PathBuf>,
+        ignored_dirs: &BTreeSet<PathBuf>,
+        workspace_ignored_dirs: &BTreeSet<PathBuf>,
         workspace_dir: Option<PathBuf>,
     ) -> Self {
         let package_globset = build_ignored_dirs_globset(ignored_dirs).unwrap_or_else(|err| {
@@ -676,17 +677,17 @@ impl TryFrom<&Path> for GlobIgnoredDirs {
 
                 package_metadata
                     .cargo_machete
-                    .map(|x| x.ignored_dirs.iter().cloned().collect::<HashSet<_>>())
+                    .map(|x| x.ignored_dirs.iter().cloned().collect::<BTreeSet<_>>())
                     .unwrap_or_default()
             } else {
-                HashSet::new()
+                BTreeSet::new()
             };
 
         let workspace_ignored_dirs = workspace_metadata
             .inspect(|metadata| {
                 trace!("found workspace package metadata: {metadata:?}");
             })
-            .map(|x| x.ignored_dirs.iter().cloned().collect::<HashSet<_>>())
+            .map(|x| x.ignored_dirs.iter().cloned().collect::<BTreeSet<_>>())
             .unwrap_or_default();
 
         Ok(Self::new(
@@ -735,12 +736,12 @@ pub(crate) fn find_unused(
         .and_then(|package| package.metadata.as_ref()?.cargo_machete.as_ref());
 
     let ignored_dirs = meta
-        .map(|meta| meta.ignored_dirs.iter().cloned().collect::<HashSet<_>>())
+        .map(|meta| meta.ignored_dirs.iter().cloned().collect::<BTreeSet<_>>())
         .unwrap_or_default();
 
     let (workspace_ignored_dirs, workspace_ignored, workspace_renamed): (
-        HashSet<PathBuf>,
-        HashSet<_>,
+        BTreeSet<PathBuf>,
+        BTreeSet<_>,
         _,
     ) = workspace_metadata
         .map(
@@ -750,8 +751,8 @@ pub(crate) fn find_unused(
                  renamed,
              }| {
                 (
-                    HashSet::from_iter(ignored_dirs),
-                    HashSet::from_iter(ignored),
+                    BTreeSet::from_iter(ignored_dirs),
+                    BTreeSet::from_iter(ignored),
                     renamed,
                 )
             },
@@ -843,7 +844,7 @@ pub(crate) fn find_unused(
 
     // Keep a side-list of ignored dependencies (likely false positives).
     let ignored = meta
-        .map(|meta| meta.ignored.iter().collect::<HashSet<_>>())
+        .map(|meta| meta.ignored.iter().collect::<BTreeSet<_>>())
         .unwrap_or_default();
 
     // Keep a list of renamed dependencies
@@ -1528,7 +1529,7 @@ fn test_ignore_dirs_glob_patterns() {
 #[cfg(test)]
 #[test_log::test]
 fn test_ignore_dirs_parent_matching_flexibility() {
-    use std::collections::HashSet;
+    use std::collections::BTreeSet;
     use std::path::{Path, PathBuf};
 
     // Test that the parent directory checking preserves glob pattern flexibility
@@ -1548,7 +1549,7 @@ fn test_ignore_dirs_parent_matching_flexibility() {
     ];
 
     for (pattern, test_path, expected) in test_cases {
-        let mut ignored_dirs = HashSet::new();
+        let mut ignored_dirs = BTreeSet::new();
         ignored_dirs.insert(PathBuf::from(pattern));
 
         let globset = build_ignored_dirs_globset(&ignored_dirs).unwrap();
