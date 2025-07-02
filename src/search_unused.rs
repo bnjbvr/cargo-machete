@@ -230,7 +230,7 @@ fn collect_paths(
 
     trace!("found root paths: {:?}", root_paths);
 
-    if root_paths.is_empty() {
+    if root_paths.is_empty() && dir_path.join("src").exists() {
         // Assume "src/" if cargo_toml didn't find anything.
         root_paths.insert(PathBuf::from("src"));
         trace!("adding src/ since paths was empty");
