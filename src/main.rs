@@ -172,20 +172,20 @@ fn run_machete_with_args(mut args: MacheteArgs) -> anyhow::Result<bool> {
     let with_metadata = args.with_metadata;
     let results_analysis = run_machete_analysis(args)?;
 
-    for PathAnalysisResult { path, analysis } in results_analysis {
+    for PathAnalysisResult { path, analyses } in results_analysis {
         // Display all the results.
         let location = match path.to_string_lossy() {
             Cow::Borrowed(".") => Cow::from("this directory"),
             pathstr => pathstr,
         };
 
-        if analysis.is_empty() {
+        if analyses.is_empty() {
             println!("cargo-machete didn't find any unused dependencies in {location}. Good job!");
             continue;
         }
 
         println!("cargo-machete found the following unused dependencies in {location}:");
-        for (analysis, path) in &analysis {
+        for (analysis, path) in &analyses {
             println!("{} -- {}:", analysis.package_name, path.to_string_lossy());
             for dep in &analysis.unused {
                 println!("\t{dep}");
@@ -234,7 +234,7 @@ fn run_machete_with_args(mut args: MacheteArgs) -> anyhow::Result<bool> {
 #[derive(Debug)]
 struct PathAnalysisResult {
     path: PathBuf,
-    analysis: Vec<(PackageAnalysis, PathBuf)>,
+    analyses: Vec<(PackageAnalysis, PathBuf)>,
 }
 
 fn run_machete_analysis(mut args: MacheteArgs) -> anyhow::Result<Vec<PathAnalysisResult>> {
@@ -284,7 +284,7 @@ fn run_machete_analysis(mut args: MacheteArgs) -> anyhow::Result<Vec<PathAnalysi
 
         // Run analysis in parallel. This will spawn new rayon tasks when dependencies are effectively
         // used by any Rust crate.
-        let analysis = manifest_path_entries
+        let analyses = manifest_path_entries
             .par_iter()
             .filter_map(
                 |manifest_path| match find_unused(manifest_path, with_metadata) {
@@ -313,7 +313,7 @@ fn run_machete_analysis(mut args: MacheteArgs) -> anyhow::Result<Vec<PathAnalysi
             .map(|(analysis, manifest_path)| (analysis, manifest_path.clone()))
             .collect::<Vec<_>>();
 
-        analysis_results.push(PathAnalysisResult { path, analysis });
+        analysis_results.push(PathAnalysisResult { path, analyses });
     }
 
     if !walkdir_errors.is_empty() {
@@ -486,14 +486,14 @@ fn test_ignore_dirs_workspace_nested_works() {
     assert_eq!(path_analysis_results.len(), 1);
     let path_analysis_result = path_analysis_results.into_iter().next().unwrap();
 
-    let analysis = path_analysis_result.analysis;
+    let analyses = path_analysis_result.analyses;
     assert_eq!(
-        analysis.len(),
+        analyses.len(),
         1,
-        "expected 1 analysis, got {len} {analysis:#?}",
-        len = analysis.len()
+        "expected 1 analysis, got {len} {analyses:#?}",
+        len = analyses.len()
     );
-    let (analysis, analysis_path) = analysis.into_iter().next().unwrap();
+    let (analysis, analysis_path) = analyses.into_iter().next().unwrap();
     assert_eq!(analysis_path, path.join("inner/Cargo.toml"));
     assert_eq!(analysis.unused, &["grep".to_string()]);
     assert!(analysis.ignored_used.is_empty());
@@ -517,14 +517,14 @@ fn test_ignore_dirs_workspace_nested_deep_works() {
     assert_eq!(path_analysis_results.len(), 1);
     let path_analysis_result = path_analysis_results.into_iter().next().unwrap();
 
-    let analysis = path_analysis_result.analysis;
+    let analyses = path_analysis_result.analyses;
     assert_eq!(
-        analysis.len(),
+        analyses.len(),
         1,
-        "expected 1 analysis, got {len} {analysis:#?}",
-        len = analysis.len()
+        "expected 1 analysis, got {len} {analyses:#?}",
+        len = analyses.len()
     );
-    let (analysis, analysis_path) = analysis.into_iter().next().unwrap();
+    let (analysis, analysis_path) = analyses.into_iter().next().unwrap();
     assert_eq!(analysis_path, path.join("inner/Cargo.toml"));
     assert_eq!(analysis.unused, &["grep".to_string()]);
     assert!(analysis.ignored_used.is_empty());
