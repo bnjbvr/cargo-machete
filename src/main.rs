@@ -5,6 +5,7 @@ use anyhow::{Context, bail};
 use rayon::prelude::*;
 use search_unused::PackageAnalysis;
 use std::path::Path;
+use std::process::ExitCode;
 use std::str::FromStr;
 use std::{borrow::Cow, fs, path::PathBuf};
 use toml_edit::{KeyMut, TableLike};
@@ -390,17 +391,15 @@ fn remove_dependencies(manifest: &str, dependency_list: &[String]) -> anyhow::Re
     Ok(serialized)
 }
 
-fn main() {
-    let exit_code = match run_machete() {
-        Ok(false) => 0,
-        Ok(true) => 1,
+fn main() -> ExitCode {
+    match run_machete() {
+        Ok(false) => ExitCode::SUCCESS,
+        Ok(true) => ExitCode::FAILURE,
         Err(err) => {
             eprintln!("Error: {err}");
-            2
+            ExitCode::from(2)
         }
-    };
-
-    std::process::exit(exit_code);
+    }
 }
 
 #[cfg(test)]
