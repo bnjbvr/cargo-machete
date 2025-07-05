@@ -252,31 +252,19 @@ fn collect_paths(manifest_path: &Path, analysis: &PackageAnalysis) -> anyhow::Re
         .map(|root| dir_path.join(root))
         .filter(|path| !glob_ignored_dirs.is_ignored(path))
         .flat_map(|path| WalkDir::new(path).into_iter())
-        .filter_map(|result| match result {
-            Ok(dir_entry) => Some(dir_entry),
-            Err(err) => {
-                eprintln!("{err}");
-                None
-            }
+        .filter_map(|result| {
+            result
+                .inspect_err(|err| {
+                    eprintln!("{err}");
+                })
+                .ok()
         })
-        .filter_map(|dir_entry| {
-            let dir_entry_path = dir_entry.path();
-
-            if glob_ignored_dirs.is_ignored(dir_entry_path) {
-                trace!("skipping ignored directory: {}", dir_entry_path.display());
-                return None;
-            }
-
-            if !dir_entry.file_type().is_file() {
-                return None;
-            }
-            if dir_entry_path
-                .extension()
-                .is_none_or(|ext| ext.to_string_lossy() != "rs")
-            {
-                return None;
-            }
-            Some(dir_entry.path().to_owned())
+        .filter(|dir_entry| !glob_ignored_dirs.is_ignored(dir_entry.path()))
+        .filter(|dir_entry| dir_entry.file_type().is_file())
+        .map(|dir_entry| dir_entry.path().to_path_buf())
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|ext| ext.to_string_lossy() == "rs")
         })
         .collect();
 
