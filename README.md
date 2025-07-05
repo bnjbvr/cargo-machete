@@ -95,8 +95,8 @@ serde = "1.0" # Used only in generated code in the "generated" directory
 # in an individual package Cargo.toml
 [package.metadata.cargo-machete]
 ignored_dirs = [
-    "generated",        # Exact directory name
-    "examples",         # Exact directory name
+    "generated",       # Exact directory name
+    "examples",        # Exact directory name
     "test_*",          # Glob: matches any directory starting with "test_"
     "**/generated",    # Glob: matches "generated" directories at any depth
     "temp_*/**",       # Glob: matches any files in directories starting with "temp_"
