@@ -476,18 +476,14 @@ pub(crate) fn is_package_ignored_by_parent(package_path: &Path) -> anyhow::Resul
         return Ok(false);
     };
 
-    debug!(
-        "Checking if package package_path={} should be ignored by parent",
-        package_path.display()
-    );
     let package_dir = package_path
         .parent()
         .ok_or_else(|| anyhow::anyhow!("package path {} has no parent", package_path.display()))?;
     let mut current_path = package_dir;
 
-    debug!(
-        "Checking if package package_dir={} should be ignored by parent",
-        package_dir.display()
+    trace!(
+        "Checking if package package_path={} should be ignored by parent",
+        package_path.display()
     );
 
     while let Some(parent) = current_path.parent() {
@@ -495,7 +491,7 @@ pub(crate) fn is_package_ignored_by_parent(package_path: &Path) -> anyhow::Resul
 
         let parent_cargo_toml = parent.join("Cargo.toml");
 
-        debug!(
+        trace!(
             "Checking parent directory: {} (cargo.toml exists: {})",
             parent.display(),
             parent_cargo_toml.exists()
@@ -505,7 +501,7 @@ pub(crate) fn is_package_ignored_by_parent(package_path: &Path) -> anyhow::Resul
             continue;
         }
 
-        debug!(
+        trace!(
             "Found parent package manifest at: {}",
             parent_cargo_toml.display()
         );
@@ -521,7 +517,7 @@ pub(crate) fn is_package_ignored_by_parent(package_path: &Path) -> anyhow::Resul
         }
     }
 
-    debug!(
+    trace!(
         "Package {} is NOT ignored by any parent",
         package_dir.display()
     );
