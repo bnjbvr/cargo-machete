@@ -8,11 +8,11 @@ runs:
   using: composite
   steps:
     - name: Install cargo-machete
-      uses: clechasseur/rs-cargo@v2
+      uses: clechasseur/rs-cargo@v3
       with:
         command: install
         args: cargo-machete@0.8.0
     - name: Machete
-      uses: clechasseur/rs-cargo@v2
+      uses: clechasseur/rs-cargo@v3
       with:
         command: machete

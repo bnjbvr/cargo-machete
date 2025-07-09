@@ -21,7 +21,7 @@ jobs:
           - nightly
 
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       - uses: dtolnay/rust-toolchain@master
         with:
@@ -75,7 +75,7 @@ jobs:
             type=ref,event=tag
             type=raw,value=latest,enable={{is_default_branch}}
       - name: Build and push Docker image
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v6
         with:
           context: .
           file: ./Dockerfile
@@ -92,7 +92,7 @@ jobs:
     strategy:
       matrix:
         include:
-          - os: ubuntu-22.04
+          - os: ubuntu-24.04
             rust: stable
             target: x86_64-unknown-linux-musl
             bin: cargo-machete
@@ -116,11 +116,11 @@ jobs:
           toolchain: ${{ matrix.rust }}
           target: ${{ matrix.target }}
       - name: Install musl tools
-        if: matrix.os == 'ubuntu-22.04'
+        if: matrix.os == 'ubuntu-24.04'
         run: |
           sudo apt-get install -y musl-tools
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
       - name: cargo fetch
         run: cargo fetch --target ${{ matrix.target }}
       - name: Release build
@@ -148,7 +148,7 @@ jobs:
             echo -n "$(shasum -ba 256 "${release_tar}" | cut -d " " -f 1)" > "${release_tar}.sha256"
           fi
       - name: Publish
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           draft: true
           files: "cargo-machete*"
