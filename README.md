@@ -111,7 +111,7 @@ A docker image for cargo machete.
 For instance, run `cargo-machete` in the `$(pwd)` directory using:
 
 ```
-docker run -v $(pwd):/src ghcr.io/bnjbvr/cargo-machete:latest
+docker run --rm -v $(pwd):/src ghcr.io/bnjbvr/cargo-machete:latest
 ```
 
 ## Cargo Machete Action
