@@ -24,6 +24,8 @@ serde = "1.0.136"
 toml_edit = "0.22.4"
 walkdir = "2.3.2"
 
-# Uncomment this for profiling.
-#[profile.release]
-#debug = true
+[profile.release]
+codegen-units = 1
+lto = "thin"
+strip = true
+#debug = true # Uncomment this for profiling
