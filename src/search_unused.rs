@@ -130,31 +130,16 @@ fn make_multiline_regexp(name: &str) -> String {
 fn collect_paths(dir_path: &Path, analysis: &PackageAnalysis) -> Vec<PathBuf> {
     let mut root_paths = HashSet::new();
 
-    if let Some(path) = analysis
-        .manifest
+    let manifest = &analysis.manifest;
+    manifest
         .lib
-        .as_ref()
-        .and_then(|lib| lib.path.as_ref())
-    {
-        assert!(
-            path.ends_with(".rs"),
-            "paths provided by cargo_toml are to Rust files"
-        );
-        let mut path_buf = PathBuf::from(path);
-        // Remove .rs extension.
-        path_buf.pop();
-        root_paths.insert(path_buf);
-    }
-
-    for product in analysis
-        .manifest
-        .bin
         .iter()
-        .chain(analysis.manifest.bench.iter())
-        .chain(analysis.manifest.test.iter())
-        .chain(analysis.manifest.example.iter())
-    {
-        if let Some(ref path) = product.path {
+        .chain(manifest.bin.iter())
+        .chain(manifest.bench.iter())
+        .chain(manifest.test.iter())
+        .chain(manifest.example.iter())
+        .filter_map(|p| p.path.as_ref())
+        .for_each(|path| {
             assert!(
                 path.ends_with(".rs"),
                 "paths provided by cargo_toml are to Rust files"
@@ -163,8 +148,7 @@ fn collect_paths(dir_path: &Path, analysis: &PackageAnalysis) -> Vec<PathBuf> {
             // Remove .rs extension.
             path_buf.pop();
             root_paths.insert(path_buf);
-        }
-    }
+        });
 
     trace!("found root paths: {root_paths:?}");
 
@@ -175,28 +159,18 @@ fn collect_paths(dir_path: &Path, analysis: &PackageAnalysis) -> Vec<PathBuf> {
     }
 
     // Collect all final paths for the crate first.
-    let paths: Vec<PathBuf> = root_paths
+    let paths = root_paths
         .iter()
         .flat_map(|root| WalkDir::new(dir_path.join(root)).into_iter())
         .filter_map(|result| {
-            let dir_entry = match result {
-                Ok(dir_entry) => dir_entry,
-                Err(err) => {
-                    eprintln!("{err}");
-                    return None;
-                }
-            };
-            if !dir_entry.file_type().is_file() {
-                return None;
-            }
-            if dir_entry
-                .path()
-                .extension()
-                .is_none_or(|ext| ext.to_string_lossy() != "rs")
-            {
-                return None;
-            }
-            Some(dir_entry.path().to_owned())
+            result
+                .inspect_err(|err| eprintln!("{err}"))
+                .ok()
+                .filter(|entry| {
+                    entry.file_type().is_file()
+                        && entry.path().extension().is_some_and(|ext| ext == "rs")
+                })
+                .map(|entry| entry.path().to_owned())
         })
         .collect();
 
@@ -431,7 +405,7 @@ pub(crate) fn find_unused(
                         .rename
                         .clone()
                         .unwrap_or_else(|| dep_spec.name.clone());
-                    (dep_key, crate_name)
+                    (dep_key, crate_name.to_string())
                 })
                 .collect()
         } else {
