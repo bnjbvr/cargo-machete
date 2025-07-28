@@ -128,27 +128,17 @@ fn make_multiline_regexp(name: &str) -> String {
 
 /// Returns all the paths to the Rust source files for a crate contained at the given path.
 fn collect_paths(dir_path: &Path, analysis: &PackageAnalysis) -> Vec<PathBuf> {
-    let mut root_paths = HashSet::new();
-
     let manifest = &analysis.manifest;
-    manifest
+    let mut root_paths: HashSet<PathBuf> = manifest
         .lib
         .iter()
         .chain(manifest.bin.iter())
         .chain(manifest.bench.iter())
         .chain(manifest.test.iter())
         .chain(manifest.example.iter())
-        .filter_map(|p| p.path.as_ref())
-        .for_each(|path| {
-            assert!(
-                path.ends_with(".rs"),
-                "paths provided by cargo_toml are to Rust files"
-            );
-            let mut path_buf = PathBuf::from(path);
-            // Remove .rs extension.
-            path_buf.pop();
-            root_paths.insert(path_buf);
-        });
+        .filter_map(|p| p.path.as_ref().filter(|s| s.ends_with(".rs")))
+        .filter_map(|s| PathBuf::from(s).parent().map(PathBuf::from)) // Remove the file name
+        .collect();
 
     trace!("found root paths: {root_paths:?}");
 
@@ -166,11 +156,11 @@ fn collect_paths(dir_path: &Path, analysis: &PackageAnalysis) -> Vec<PathBuf> {
             result
                 .inspect_err(|err| eprintln!("{err}"))
                 .ok()
-                .filter(|entry| {
-                    entry.file_type().is_file()
-                        && entry.path().extension().is_some_and(|ext| ext == "rs")
+                .and_then(|entry| {
+                    (entry.file_type().is_file()
+                        && entry.path().extension().is_some_and(|ext| ext == "rs"))
+                    .then(|| entry.path().to_owned())
                 })
-                .map(|entry| entry.path().to_owned())
         })
         .collect();
 
