@@ -166,7 +166,7 @@ fn collect_paths(dir_path: &Path, analysis: &PackageAnalysis) -> Vec<PathBuf> {
         }
     }
 
-    trace!("found root paths: {:?}", root_paths);
+    trace!("found root paths: {root_paths:?}");
 
     if root_paths.is_empty() {
         // Assume "src/" if cargo_toml didn't find anything.
@@ -325,11 +325,10 @@ fn get_full_manifest(
         let workspace_cargo_path = dir_path.join("Cargo.toml");
         if let Ok(workspace_manifest) =
             cargo_toml::Manifest::<PackageMetadata>::from_path_with_metadata(&workspace_cargo_path)
+            && workspace_manifest.workspace.is_some()
         {
-            if workspace_manifest.workspace.is_some() {
-                ws_manifest_and_path = Some((workspace_manifest, workspace_cargo_path));
-                break;
-            }
+            ws_manifest_and_path = Some((workspace_manifest, workspace_cargo_path));
+            break;
         }
     }
 
@@ -417,7 +416,7 @@ pub(crate) fn find_unused(
                     let mut dep_spec_it = root_package
                         .dependencies
                         .iter()
-                        .filter(|dep_spec| dep_spec.name == dep_pkg.name);
+                        .filter(|dep_spec| dep_spec.name == *dep_pkg.name);
 
                     // The dependency can appear more than once, for example if it is both
                     // a dependency and a dev-dependency (often with more features enabled).
