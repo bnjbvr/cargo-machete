@@ -128,43 +128,22 @@ fn make_multiline_regexp(name: &str) -> String {
 
 /// Returns all the paths to the Rust source files for a crate contained at the given path.
 fn collect_paths(dir_path: &Path, analysis: &PackageAnalysis) -> Vec<PathBuf> {
-    let mut root_paths = HashSet::new();
+    let manifest = &analysis.manifest;
 
-    if let Some(path) = analysis
-        .manifest
+    let mut root_paths: HashSet<PathBuf> = manifest
         .lib
-        .as_ref()
-        .and_then(|lib| lib.path.as_ref())
-    {
-        assert!(
-            path.ends_with(".rs"),
-            "paths provided by cargo_toml are to Rust files"
-        );
-        let mut path_buf = PathBuf::from(path);
-        // Remove .rs extension.
-        path_buf.pop();
-        root_paths.insert(path_buf);
-    }
-
-    for product in analysis
-        .manifest
-        .bin
         .iter()
-        .chain(analysis.manifest.bench.iter())
-        .chain(analysis.manifest.test.iter())
-        .chain(analysis.manifest.example.iter())
-    {
-        if let Some(ref path) = product.path {
-            assert!(
-                path.ends_with(".rs"),
-                "paths provided by cargo_toml are to Rust files"
-            );
-            let mut path_buf = PathBuf::from(path);
-            // Remove .rs extension.
-            path_buf.pop();
-            root_paths.insert(path_buf);
-        }
-    }
+        .chain(manifest.bin.iter())
+        .chain(manifest.bench.iter())
+        .chain(manifest.test.iter())
+        .chain(manifest.example.iter())
+        .filter_map(|p| {
+            // Keep only files which names in `.rs`.
+            let path_str = p.path.as_ref().filter(|s| s.ends_with(".rs"))?;
+            // Remove the file name.
+            PathBuf::from(path_str).parent().map(PathBuf::from)
+        })
+        .collect();
 
     trace!("found root paths: {root_paths:?}");
 
@@ -175,28 +154,18 @@ fn collect_paths(dir_path: &Path, analysis: &PackageAnalysis) -> Vec<PathBuf> {
     }
 
     // Collect all final paths for the crate first.
-    let paths: Vec<PathBuf> = root_paths
+    let paths = root_paths
         .iter()
         .flat_map(|root| WalkDir::new(dir_path.join(root)).into_iter())
         .filter_map(|result| {
-            let dir_entry = match result {
-                Ok(dir_entry) => dir_entry,
-                Err(err) => {
-                    eprintln!("{err}");
-                    return None;
-                }
-            };
-            if !dir_entry.file_type().is_file() {
-                return None;
-            }
-            if dir_entry
-                .path()
-                .extension()
-                .is_none_or(|ext| ext.to_string_lossy() != "rs")
-            {
-                return None;
-            }
-            Some(dir_entry.path().to_owned())
+            result
+                .inspect_err(|err| eprintln!("{err}"))
+                .ok()
+                .and_then(|entry| {
+                    (entry.file_type().is_file()
+                        && entry.path().extension().is_some_and(|ext| ext == "rs"))
+                    .then(|| entry.path().to_owned())
+                })
         })
         .collect();
 
