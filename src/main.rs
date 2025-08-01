@@ -50,6 +50,10 @@ struct MacheteArgs {
     #[argh(switch)]
     no_ignore: bool,
 
+    /// analyze workspace-level dependencies and dependencies across all workspace members.
+    #[argh(switch)]
+    workspace: bool,
+
     /// print version.
     #[argh(switch)]
     version: bool,
@@ -132,17 +136,32 @@ fn run_machete() -> anyhow::Result<bool> {
     }
 
     if args.paths.is_empty() {
-        eprintln!("Analyzing dependencies of crates in this directory...");
+        if args.workspace {
+            eprintln!("Analyzing workspace dependencies in current directory...");
+        } else {
+            eprintln!("Analyzing dependencies of crates in this directory...");
+        }
         args.paths.push(PathBuf::from("."));
     } else {
-        eprintln!(
-            "Analyzing dependencies of crates in {}...",
-            args.paths
-                .iter()
-                .map(|path| path.as_os_str().to_string_lossy().to_string())
-                .collect::<Vec<_>>()
-                .join(",")
-        );
+        if args.workspace {
+            eprintln!(
+                "Analyzing workspace dependencies in {}...",
+                args.paths
+                    .iter()
+                    .map(|path| path.as_os_str().to_string_lossy().to_string())
+                    .collect::<Vec<_>>()
+                    .join(",")
+            );
+        } else {
+            eprintln!(
+                "Analyzing dependencies of crates in {}...",
+                args.paths
+                    .iter()
+                    .map(|path| path.as_os_str().to_string_lossy().to_string())
+                    .collect::<Vec<_>>()
+                    .join(",")
+            );
+        }
     }
 
     let mut has_unused_dependencies = false;
@@ -174,8 +193,8 @@ fn run_machete() -> anyhow::Result<bool> {
         // used by any Rust crate.
         let results = manifest_path_entries
             .par_iter()
-            .filter_map(
-                |manifest_path| match find_unused(manifest_path, with_metadata) {
+            .filter_map(|manifest_path| {
+                match find_unused(manifest_path, with_metadata, args.workspace) {
                     Ok(Some(analysis)) => {
                         if analysis.unused.is_empty() {
                             None
@@ -196,8 +215,8 @@ fn run_machete() -> anyhow::Result<bool> {
                         eprintln!("error when handling {}: {:#}", manifest_path.display(), err);
                         None
                     }
-                },
-            )
+                }
+            })
             .collect::<Vec<_>>();
 
         // Display all the results.
