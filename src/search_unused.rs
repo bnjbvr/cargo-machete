@@ -129,6 +129,7 @@ fn make_multiline_regexp(name: &str) -> String {
 /// Returns all the paths to the Rust source files for a crate contained at the given path.
 fn collect_paths(dir_path: &Path, analysis: &PackageAnalysis) -> Vec<PathBuf> {
     let manifest = &analysis.manifest;
+
     let mut root_paths: HashSet<PathBuf> = manifest
         .lib
         .iter()
@@ -136,8 +137,12 @@ fn collect_paths(dir_path: &Path, analysis: &PackageAnalysis) -> Vec<PathBuf> {
         .chain(manifest.bench.iter())
         .chain(manifest.test.iter())
         .chain(manifest.example.iter())
-        .filter_map(|p| p.path.as_ref().filter(|s| s.ends_with(".rs")))
-        .filter_map(|s| PathBuf::from(s).parent().map(PathBuf::from)) // Remove the file name
+        .filter_map(|p| {
+            // Keep only files which names in `.rs`.
+            let path_str = p.path.as_ref().filter(|s| s.ends_with(".rs"))?;
+            // Remove the file name.
+            PathBuf::from(path_str).parent().map(PathBuf::from)
+        })
         .collect();
 
     trace!("found root paths: {root_paths:?}");
@@ -395,7 +400,7 @@ pub(crate) fn find_unused(
                         .rename
                         .clone()
                         .unwrap_or_else(|| dep_spec.name.clone());
-                    (dep_key, crate_name.to_string())
+                    (dep_key, crate_name)
                 })
                 .collect()
         } else {
