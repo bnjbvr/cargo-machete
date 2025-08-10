@@ -1,0 +1,8 @@
+[package]
+name = "api"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+hyper = "0.14"
+clap = { version = "4.0", features = ["derive"] }
