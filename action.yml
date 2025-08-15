@@ -12,6 +12,7 @@ runs:
       with:
         command: install
         args: cargo-machete@0.9.0
+        toolchain: stable
     - name: Machete
       uses: clechasseur/rs-cargo@v3
       with:
