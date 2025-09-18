@@ -1,0 +1,4 @@
+[workspace]
+members = []
+
+# No workspace.dependencies section - this should not cause errors
