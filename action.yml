@@ -17,54 +17,10 @@ inputs:
 runs:
   using: composite
   steps:
-    - name: Determine platform triple
-      shell: bash
-      id: platform
-      run: |
-        TRIPLE=$(rustc -vV | grep host | awk '{print $2}')
-        if [[ "$TRIPLE" == *"unknown-linux"* && "$TRIPLE" == *"x86_64"* ]]; then
-          # Replace 'gnu' with 'musl' only for linux x86_64.
-          TRIPLE="${TRIPLE/gnu/musl}"
-        fi
-        echo "TRIPLE=${TRIPLE}" >> $GITHUB_ENV
-
-
-    - name: Get latest release version
-      id: get_version
-      shell: bash
-      run: |
-        VERSION=$(curl -s https://api.github.com/repos/bnjbvr/cargo-machete/releases/latest | jq -r .tag_name)
-        echo "VERSION=${VERSION}" >> $GITHUB_ENV
-
-    - name: Install a precompiled or compile `cargo-machete``cargo-machete`
+    - name: Install precompiled or compile `cargo-machete`
       id: download
       shell: bash
-      run: |
-        TRIPLE=${{ env.TRIPLE }}
-        VERSION=${{ env.VERSION }}
-        ARCHIVE_URL="https://github.com/bnjbvr/cargo-machete/releases/download/${VERSION}/cargo-machete-${VERSION}-${TRIPLE}.tar.gz"
-
-        if curl --output /dev/null --silent --head --fail "$ARCHIVE_URL"; then
-          echo "Downloading precompiled binary from $ARCHIVE_URL"
-          curl -L -o cargo-machete.tar.gz "$ARCHIVE_URL"
-          tar -xzf cargo-machete.tar.gz
-          mv cargo*/cargo-machete /usr/local/bin/cargo-machete
-          chmod +x /usr/local/bin/cargo-machete
-          echo "cargo-machete downloaded and extracted successfully."
-        else
-          echo "Precompiled binary not found for $TRIPLE. Falling back to cargo install."
-          cargo install cargo-machete
-        fi
-
-    - name: Verify installation
-      shell: bash
-      run: |
-        if command -v cargo-machete; then
-          echo "cargo-machete installed successfully."
-        else
-          echo "cargo-machete installation failed."
-          exit 1
-        fi
+      run: $GITHUB_ACTION_PATH/action/entrypoint.sh
 
     - name: Run `cargo-machete`
       shell: bash
