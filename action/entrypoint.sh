@@ -19,7 +19,7 @@ echo "Found VERSION=${VERSION}."
 ARCHIVE_URL="https://github.com/bnjbvr/cargo-machete/releases/download/${VERSION}/cargo-machete-${VERSION}-${TRIPLE}.tar.gz"
 
 if curl --output /dev/null --silent --head --fail "$ARCHIVE_URL"; then
-  echo "Downloading precompiled binary from $ARCHIVE_URL…"
+  echo "Downloading precompiled binary from ${ARCHIVE_URL} …"
   curl -L -o cargo-machete.tar.gz "$ARCHIVE_URL"
   tar -xzf cargo-machete.tar.gz
   mv cargo*/cargo-machete /usr/local/bin/cargo-machete
