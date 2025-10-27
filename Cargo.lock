@@ -209,9 +209,9 @@ dependencies = [
 
 [[package]]
 name = "grep"
-version = "0.4.0"
+version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "82a2889f2c013e131251edb71255aa4950c40329839842a88da6321c62e121b1"
+checksum = "309217bc53e2c691c314389c7fa91f9cd1a998cda19e25544ea47d94103880c3"
 dependencies = [
  "grep-cli",
  "grep-matcher",
@@ -245,9 +245,9 @@ dependencies = [
 
 [[package]]
 name = "grep-printer"
-version = "0.3.0"
+version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5867638e0afe4ec9be762ac4cf40cc099da1f828f180da3df8c03805b07b4660"
+checksum = "fd76035e87871f51c1ee5b793e32122b3ccf9c692662d9622ef1686ff5321acb"
 dependencies = [
  "bstr",
  "grep-matcher",
@@ -273,9 +273,9 @@ dependencies = [
 
 [[package]]
 name = "grep-searcher"
-version = "0.1.15"
+version = "0.1.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5f3fee5d08eb17c47cbca241967c66154f934515b4974be48380be2dbb019586"
+checksum = "ac63295322dc48ebb20a25348147905d816318888e64f531bfc2a2bc0577dc34"
 dependencies = [
  "bstr",
  "encoding_rs",
