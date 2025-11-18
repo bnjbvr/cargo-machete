@@ -1,0 +1,5 @@
+[workspace]
+members = ["math", "network", "api"]
+
+[workspace.metadata.cargo-machete]
+skip-workspace-members = ["network"]
