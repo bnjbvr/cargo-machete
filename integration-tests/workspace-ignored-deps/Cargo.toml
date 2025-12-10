@@ -1,0 +1,13 @@
+[workspace]
+members = ["app"]
+
+[workspace.dependencies]
+# This dependency is unused and should be reported
+rand = "0.8"
+serde = "1.0"
+# This dependency is unused but should be ignored
+tokio = "1.0"
+
+[workspace.metadata.cargo-machete]
+# tokio is intentionally unused (maybe for future use)
+ignored = ["tokio"]

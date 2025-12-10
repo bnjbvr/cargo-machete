@@ -1,0 +1,11 @@
+[workspace]
+members = ["member1", "member2"]
+
+[workspace.dependencies]
+anyhow = "1.0"
+# This dependency is used by member2
+log = "0.4"
+# These dependencies are not used by any member
+rand = "0.8"
+# This dependency is used by member1
+serde = "1.0"
