@@ -66,6 +66,20 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Get version label
+        id: version
+        run: |
+          # Try to get exact tag (if this commit is tagged)
+          TAG=$(git describe --tags --exact-match 2>/dev/null || echo "")
+          
+          if [ -n "$TAG" ]; then
+            VERSION="$TAG"
+          else
+            # Not tagged — use git describe with abbrev for main branch, i.e. v0.9.1-28-gb062
+            VERSION=$(git describe --tags --abbrev=4 2>/dev/null || echo "latest")
+          fi
+          
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
       - name: Extract metadata (tags, labels) for Docker
         id: meta
         uses: docker/metadata-action@v5
@@ -74,6 +88,9 @@ jobs:
           tags: |
             type=ref,event=tag
             type=raw,value=latest,enable={{is_default_branch}}
+          labels: |
+            org.opencontainers.image.authors=Benjamin Bouvier <benjamin@bouvier.cc>
+            org.opencontainers.image.version=${{ steps.version.outputs.version }}
       - name: Build and push Docker image
         uses: docker/build-push-action@v6
         with:
