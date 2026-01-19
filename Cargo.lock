@@ -82,6 +82,7 @@ dependencies = [
  "pretty_env_logger",
  "rayon",
  "serde",
+ "serde_json",
  "tikv-jemallocator",
  "toml_edit",
  "walkdir",
