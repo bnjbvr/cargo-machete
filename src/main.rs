@@ -3,6 +3,7 @@ mod search_unused;
 use crate::search_unused::find_unused;
 use anyhow::{Context, bail};
 use rayon::prelude::*;
+use serde::Serialize;
 use std::path::Path;
 use std::str::FromStr;
 use std::{borrow::Cow, fs, path::PathBuf};
@@ -53,6 +54,10 @@ struct MacheteArgs {
     /// print version.
     #[argh(switch)]
     version: bool,
+
+    /// output results as JSON for tooling integration.
+    #[argh(switch)]
+    json: bool,
 
     /// paths to directories that must be scanned.
     #[argh(positional, greedy)]
@@ -115,6 +120,26 @@ fn running_as_cargo_cmd() -> bool {
     std::env::var("CARGO").is_ok() && std::env::var("CARGO_PKG_NAME").is_err()
 }
 
+/// JSON output structure for unused dependencies.
+#[derive(Serialize)]
+struct JsonOutput {
+    /// List of crates with unused dependencies.
+    crates: Vec<CrateUnusedDeps>,
+}
+
+/// JSON structure for a single crate's unused dependencies.
+#[derive(Serialize)]
+struct CrateUnusedDeps {
+    /// The name of the package.
+    package_name: String,
+    /// Path to the Cargo.toml file.
+    manifest_path: String,
+    /// List of unused dependency names.
+    unused: Vec<String>,
+    /// List of dependencies marked as ignored but actually used.
+    ignored_used: Vec<String>,
+}
+
 /// Runs `cargo-machete`.
 /// Returns Ok with a bool whether any unused dependencies were found, or Err on errors.
 fn run_machete() -> anyhow::Result<bool> {
@@ -132,9 +157,11 @@ fn run_machete() -> anyhow::Result<bool> {
     }
 
     if args.paths.is_empty() {
-        eprintln!("Analyzing dependencies of crates in this directory...");
+        if !args.json {
+            eprintln!("Analyzing dependencies of crates in this directory...");
+        }
         args.paths.push(PathBuf::from("."));
-    } else {
+    } else if !args.json {
         eprintln!(
             "Analyzing dependencies of crates in {}...",
             args.paths
@@ -147,8 +174,9 @@ fn run_machete() -> anyhow::Result<bool> {
 
     let mut has_unused_dependencies = false;
     let mut walkdir_errors = Vec::new();
+    let mut json_output = JsonOutput { crates: Vec::new() };
 
-    for path in args.paths {
+    for path in args.paths.clone() {
         let manifest_path_entries = match collect_paths(
             &path,
             CollectPathOptions {
@@ -206,54 +234,75 @@ fn run_machete() -> anyhow::Result<bool> {
             pathstr => pathstr,
         };
 
-        if results.is_empty() {
-            println!("cargo-machete didn't find any unused dependencies in {location}. Good job!");
-            continue;
-        }
-
-        println!("cargo-machete found the following unused dependencies in {location}:");
-        for (analysis, path) in results {
-            println!("{} -- {}:", analysis.package_name, path.to_string_lossy());
-            for dep in &analysis.unused {
-                println!("\t{dep}");
-                has_unused_dependencies = true; // any unused dependency is enough to set flag to true
+        if args.json {
+            // Collect results for JSON output.
+            for (analysis, path) in results {
+                if !analysis.unused.is_empty() {
+                    has_unused_dependencies = true;
+                }
+                json_output.crates.push(CrateUnusedDeps {
+                    package_name: analysis.package_name.clone(),
+                    manifest_path: path.to_string_lossy().to_string(),
+                    unused: analysis.unused.clone(),
+                    ignored_used: analysis.ignored_used.clone(),
+                });
+            }
+        } else {
+            if results.is_empty() {
+                println!(
+                    "cargo-machete didn't find any unused dependencies in {location}. Good job!"
+                );
+                continue;
             }
 
-            for dep in &analysis.ignored_used {
-                eprintln!("\t⚠️  {dep} was marked as ignored, but is actually used!");
-            }
+            println!("cargo-machete found the following unused dependencies in {location}:");
+            for (analysis, path) in results {
+                println!("{} -- {}:", analysis.package_name, path.to_string_lossy());
+                for dep in &analysis.unused {
+                    println!("\t{dep}");
+                    has_unused_dependencies = true; // any unused dependency is enough to set flag to true
+                }
 
-            if args.fix {
-                let fixed = remove_dependencies(&fs::read_to_string(path)?, &analysis.unused)?;
-                fs::write(path, fixed).expect("Cargo.toml write error");
+                for dep in &analysis.ignored_used {
+                    eprintln!("\t⚠️  {dep} was marked as ignored, but is actually used!");
+                }
+
+                if args.fix {
+                    let fixed = remove_dependencies(&fs::read_to_string(path)?, &analysis.unused)?;
+                    fs::write(path, fixed).expect("Cargo.toml write error");
+                }
             }
         }
     }
 
-    if has_unused_dependencies {
-        println!(
-            "\n\
-            If you believe cargo-machete has detected an unused dependency incorrectly,\n\
-            you can add the dependency to the list of dependencies to ignore in the\n\
-            `[package.metadata.cargo-machete]` section of the appropriate Cargo.toml.\n\
-            For example:\n\
-            \n\
-            [package.metadata.cargo-machete]\n\
-            ignored = [\"prost\"]"
-        );
-
-        if !args.with_metadata {
+    if args.json {
+        println!("{}", serde_json::to_string(&json_output)?);
+    } else {
+        if has_unused_dependencies {
             println!(
                 "\n\
-                You can also try running it with the `--with-metadata` flag for better accuracy,\n\
-                though this may modify your Cargo.lock files."
+                If you believe cargo-machete has detected an unused dependency incorrectly,\n\
+                you can add the dependency to the list of dependencies to ignore in the\n\
+                `[package.metadata.cargo-machete]` section of the appropriate Cargo.toml.\n\
+                For example:\n\
+                \n\
+                [package.metadata.cargo-machete]\n\
+                ignored = [\"prost\"]"
             );
+
+            if !args.with_metadata {
+                println!(
+                    "\n\
+                    You can also try running it with the `--with-metadata` flag for better accuracy,\n\
+                    though this may modify your Cargo.lock files."
+                );
+            }
+
+            println!();
         }
 
-        println!();
+        eprintln!("Done!");
     }
-
-    eprintln!("Done!");
 
     if !walkdir_errors.is_empty() {
         anyhow::bail!(
