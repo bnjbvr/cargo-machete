@@ -276,20 +276,20 @@ fn run_machete() -> anyhow::Result<bool> {
     if has_unused_dependencies {
         eprintln!(
             "\n\
-                If you believe cargo-machete has detected an unused dependency incorrectly,\n\
-                you can add the dependency to the list of dependencies to ignore in the\n\
-                `[package.metadata.cargo-machete]` section of the appropriate Cargo.toml.\n\
-                For example:\n\
-                \n\
-                [package.metadata.cargo-machete]\n\
-                ignored = [\"prost\"]"
+            If you believe cargo-machete has detected an unused dependency incorrectly,\n\
+            you can add the dependency to the list of dependencies to ignore in the\n\
+            `[package.metadata.cargo-machete]` section of the appropriate Cargo.toml.\n\
+            For example:\n\
+            \n\
+            [package.metadata.cargo-machete]\n\
+            ignored = [\"prost\"]"
         );
 
         if !args.with_metadata {
             eprintln!(
                 "\n\
-                    You can also try running it with the `--with-metadata` flag for better accuracy,\n\
-                    though this may modify your Cargo.lock files."
+                You can also try running it with the `--with-metadata` flag for better accuracy,\n\
+                though this may modify your Cargo.lock files."
             );
         }
 
