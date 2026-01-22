@@ -176,7 +176,7 @@ fn run_machete() -> anyhow::Result<bool> {
     let mut walkdir_errors = Vec::new();
     let mut json_output = JsonOutput { crates: Vec::new() };
 
-    for path in args.paths.clone() {
+    for path in args.paths {
         let manifest_path_entries = match collect_paths(
             &path,
             CollectPathOptions {
