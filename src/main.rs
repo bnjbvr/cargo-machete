@@ -157,11 +157,9 @@ fn run_machete() -> anyhow::Result<bool> {
     }
 
     if args.paths.is_empty() {
-        if !args.json {
-            eprintln!("Analyzing dependencies of crates in this directory...");
-        }
+        eprintln!("Analyzing dependencies of crates in this directory...");
         args.paths.push(PathBuf::from("."));
-    } else if !args.json {
+    } else {
         eprintln!(
             "Analyzing dependencies of crates in {}...",
             args.paths
