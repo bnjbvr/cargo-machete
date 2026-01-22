@@ -152,7 +152,7 @@ fn run_machete() -> anyhow::Result<bool> {
     };
 
     if args.version {
-        println!("{}", env!("CARGO_PKG_VERSION"));
+        eprintln!("{}", env!("CARGO_PKG_VERSION"));
         std::process::exit(0);
     }
 
@@ -232,9 +232,32 @@ fn run_machete() -> anyhow::Result<bool> {
             pathstr => pathstr,
         };
 
+        if results.is_empty() {
+            eprintln!("cargo-machete didn't find any unused dependencies in {location}. Good job!");
+            continue;
+        }
+
+        eprintln!("cargo-machete found the following unused dependencies in {location}:");
+        for (analysis, path) in &results {
+            eprintln!("{} -- {}:", analysis.package_name, path.to_string_lossy());
+            for dep in &analysis.unused {
+                eprintln!("\t{dep}");
+                has_unused_dependencies = true; // any unused dependency is enough to set flag to true
+            }
+
+            for dep in &analysis.ignored_used {
+                eprintln!("\t⚠️  {dep} was marked as ignored, but is actually used!");
+            }
+
+            if args.fix {
+                let fixed = remove_dependencies(&fs::read_to_string(path)?, &analysis.unused)?;
+                fs::write(path, fixed).expect("Cargo.toml write error");
+            }
+        }
+
         if args.json {
             // Collect results for JSON output.
-            for (analysis, path) in results {
+            for (analysis, path) in &results {
                 if !analysis.unused.is_empty() {
                     has_unused_dependencies = true;
                 }
@@ -245,40 +268,14 @@ fn run_machete() -> anyhow::Result<bool> {
                     ignored_used: analysis.ignored_used.clone(),
                 });
             }
-        } else {
-            if results.is_empty() {
-                println!(
-                    "cargo-machete didn't find any unused dependencies in {location}. Good job!"
-                );
-                continue;
-            }
 
-            println!("cargo-machete found the following unused dependencies in {location}:");
-            for (analysis, path) in results {
-                println!("{} -- {}:", analysis.package_name, path.to_string_lossy());
-                for dep in &analysis.unused {
-                    println!("\t{dep}");
-                    has_unused_dependencies = true; // any unused dependency is enough to set flag to true
-                }
-
-                for dep in &analysis.ignored_used {
-                    eprintln!("\t⚠️  {dep} was marked as ignored, but is actually used!");
-                }
-
-                if args.fix {
-                    let fixed = remove_dependencies(&fs::read_to_string(path)?, &analysis.unused)?;
-                    fs::write(path, fixed).expect("Cargo.toml write error");
-                }
-            }
+            println!("{}", serde_json::to_string(&json_output)?);
         }
     }
 
-    if args.json {
-        println!("{}", serde_json::to_string(&json_output)?);
-    } else {
-        if has_unused_dependencies {
-            println!(
-                "\n\
+    if has_unused_dependencies {
+        eprintln!(
+            "\n\
                 If you believe cargo-machete has detected an unused dependency incorrectly,\n\
                 you can add the dependency to the list of dependencies to ignore in the\n\
                 `[package.metadata.cargo-machete]` section of the appropriate Cargo.toml.\n\
@@ -286,21 +283,20 @@ fn run_machete() -> anyhow::Result<bool> {
                 \n\
                 [package.metadata.cargo-machete]\n\
                 ignored = [\"prost\"]"
-            );
+        );
 
-            if !args.with_metadata {
-                println!(
-                    "\n\
+        if !args.with_metadata {
+            eprintln!(
+                "\n\
                     You can also try running it with the `--with-metadata` flag for better accuracy,\n\
                     though this may modify your Cargo.lock files."
-                );
-            }
-
-            println!();
+            );
         }
 
-        eprintln!("Done!");
+        eprintln!();
     }
+
+    eprintln!("Done!");
 
     if !walkdir_errors.is_empty() {
         anyhow::bail!(
