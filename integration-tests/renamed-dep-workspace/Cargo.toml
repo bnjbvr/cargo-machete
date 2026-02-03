@@ -3,7 +3,7 @@ members = ["./inner"]
 
 [workspace.dependencies]
 rustls-webpki = "0.102.8"
-bytes = "1.10.0"
+bytes = "1.11.1"
 flagset = "0.4.6"
 
 [workspace.metadata.cargo-machete.renamed]
