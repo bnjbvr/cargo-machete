@@ -3,6 +3,7 @@ mod search_unused;
 use crate::search_unused::find_unused;
 use anyhow::{Context, bail};
 use rayon::prelude::*;
+use serde::Serialize;
 use std::path::Path;
 use std::str::FromStr;
 use std::{borrow::Cow, fs, path::PathBuf};
@@ -53,6 +54,10 @@ struct MacheteArgs {
     /// print version.
     #[argh(switch)]
     version: bool,
+
+    /// output results as JSON for tooling integration.
+    #[argh(switch)]
+    json: bool,
 
     /// paths to directories that must be scanned.
     #[argh(positional, greedy)]
@@ -115,6 +120,26 @@ fn running_as_cargo_cmd() -> bool {
     std::env::var("CARGO").is_ok() && std::env::var("CARGO_PKG_NAME").is_err()
 }
 
+/// JSON output structure for unused dependencies.
+#[derive(Serialize)]
+struct JsonOutput {
+    /// List of crates with unused dependencies.
+    crates: Vec<CrateUnusedDeps>,
+}
+
+/// JSON structure for a single crate's unused dependencies.
+#[derive(Serialize)]
+struct CrateUnusedDeps {
+    /// The name of the package.
+    package_name: String,
+    /// Path to the Cargo.toml file.
+    manifest_path: String,
+    /// List of unused dependency names.
+    unused: Vec<String>,
+    /// List of dependencies marked as ignored but actually used.
+    ignored_used: Vec<String>,
+}
+
 /// Runs `cargo-machete`.
 /// Returns Ok with a bool whether any unused dependencies were found, or Err on errors.
 fn run_machete() -> anyhow::Result<bool> {
@@ -127,7 +152,7 @@ fn run_machete() -> anyhow::Result<bool> {
     };
 
     if args.version {
-        println!("{}", env!("CARGO_PKG_VERSION"));
+        eprintln!("{}", env!("CARGO_PKG_VERSION"));
         std::process::exit(0);
     }
 
@@ -147,6 +172,7 @@ fn run_machete() -> anyhow::Result<bool> {
 
     let mut has_unused_dependencies = false;
     let mut walkdir_errors = Vec::new();
+    let mut json_output = JsonOutput { crates: Vec::new() };
 
     for path in args.paths {
         let manifest_path_entries = match collect_paths(
@@ -207,15 +233,15 @@ fn run_machete() -> anyhow::Result<bool> {
         };
 
         if results.is_empty() {
-            println!("cargo-machete didn't find any unused dependencies in {location}. Good job!");
+            eprintln!("cargo-machete didn't find any unused dependencies in {location}. Good job!");
             continue;
         }
 
-        println!("cargo-machete found the following unused dependencies in {location}:");
-        for (analysis, path) in results {
-            println!("{} -- {}:", analysis.package_name, path.to_string_lossy());
+        eprintln!("cargo-machete found the following unused dependencies in {location}:");
+        for (analysis, path) in &results {
+            eprintln!("{} -- {}:", analysis.package_name, path.to_string_lossy());
             for dep in &analysis.unused {
-                println!("\t{dep}");
+                eprintln!("\t{dep}");
                 has_unused_dependencies = true; // any unused dependency is enough to set flag to true
             }
 
@@ -228,10 +254,27 @@ fn run_machete() -> anyhow::Result<bool> {
                 fs::write(path, fixed).expect("Cargo.toml write error");
             }
         }
+
+        if args.json {
+            // Collect results for JSON output.
+            for (analysis, path) in &results {
+                if !analysis.unused.is_empty() {
+                    has_unused_dependencies = true;
+                }
+                json_output.crates.push(CrateUnusedDeps {
+                    package_name: analysis.package_name.clone(),
+                    manifest_path: path.to_string_lossy().to_string(),
+                    unused: analysis.unused.clone(),
+                    ignored_used: analysis.ignored_used.clone(),
+                });
+            }
+
+            println!("{}", serde_json::to_string(&json_output)?);
+        }
     }
 
     if has_unused_dependencies {
-        println!(
+        eprintln!(
             "\n\
             If you believe cargo-machete has detected an unused dependency incorrectly,\n\
             you can add the dependency to the list of dependencies to ignore in the\n\
@@ -243,14 +286,14 @@ fn run_machete() -> anyhow::Result<bool> {
         );
 
         if !args.with_metadata {
-            println!(
+            eprintln!(
                 "\n\
                 You can also try running it with the `--with-metadata` flag for better accuracy,\n\
                 though this may modify your Cargo.lock files."
             );
         }
 
-        println!();
+        eprintln!();
     }
 
     eprintln!("Done!");
