@@ -12,7 +12,7 @@ readme = "README.md"
 
 [dependencies]
 anyhow = "1.0.100"
-argh = "0.1.9"
+argh = "0.1.14"
 cargo_metadata = "0.23.1"
 cargo_toml = "0.22.3"
 grep = "0.4.1"
