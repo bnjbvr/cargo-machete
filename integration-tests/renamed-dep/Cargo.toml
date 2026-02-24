@@ -8,7 +8,7 @@ edition = "2021"
 [dependencies]
 log = "0.4.14"            # unused
 rustls-webpki = "0.102.8"
-bytes = "1.10.0"
+bytes = "1.11.1"
 flagset = "0.4.6"
 
 [package.metadata.cargo-machete]
