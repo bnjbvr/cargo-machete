@@ -54,6 +54,10 @@ struct MacheteArgs {
     #[argh(switch)]
     version: bool,
 
+    /// skip analysis for specified workspace members (comma-separated list).
+    #[argh(option)]
+    skip_workspace_members: Option<String>,
+
     /// paths to directories that must be scanned.
     #[argh(positional, greedy)]
     paths: Vec<PathBuf>,
@@ -170,12 +174,22 @@ fn run_machete() -> anyhow::Result<bool> {
             UseCargoMetadata::No
         };
 
+        let skip_workspace_members = args
+            .skip_workspace_members
+            .as_ref()
+            .map(|s| {
+                s.split(',')
+                    .map(|s| s.trim().to_string())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+
         // Run analysis in parallel. This will spawn new rayon tasks when dependencies are effectively
         // used by any Rust crate.
         let results = manifest_path_entries
             .par_iter()
-            .filter_map(
-                |manifest_path| match find_unused(manifest_path, with_metadata) {
+            .filter_map(|manifest_path| {
+                match find_unused(manifest_path, with_metadata, &skip_workspace_members) {
                     Ok(Some(analysis)) => {
                         if analysis.unused.is_empty() {
                             None
@@ -196,8 +210,8 @@ fn run_machete() -> anyhow::Result<bool> {
                         eprintln!("error when handling {}: {:#}", manifest_path.display(), err);
                         None
                     }
-                },
-            )
+                }
+            })
             .collect::<Vec<_>>();
 
         // Display all the results.
