@@ -92,7 +92,7 @@ jobs:
             org.opencontainers.image.authors=Benjamin Bouvier <benjamin@bouvier.cc>
             org.opencontainers.image.version=${{ steps.version.outputs.version }}
       - name: Build and push Docker image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: ./Dockerfile
