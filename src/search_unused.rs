@@ -514,7 +514,7 @@ impl Sink for StopAfterFirstMatch {
         _searcher: &searcher::Searcher,
         matsh: &searcher::SinkMatch<'_>,
     ) -> Result<bool, Self::Error> {
-        let mat = String::from_utf8(matsh.bytes().to_vec())?;
+        let mat = std::str::from_utf8(matsh.bytes())?;
         let mat = mat.trim();
 
         if mat.starts_with("//") || mat.starts_with("//!") {
