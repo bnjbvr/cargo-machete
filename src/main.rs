@@ -8,6 +8,14 @@ use std::str::FromStr;
 use std::{borrow::Cow, fs, path::PathBuf};
 use toml_edit::{KeyMut, TableLike};
 
+/// Use jemalloc on 64-bit musl since musl's default allocator is very slow when used from multiple
+/// threads (e.g. when using rayon).
+///
+/// See https://github.com/BurntSushi/ripgrep/issues/1268#issuecomment-486432534
+#[cfg(all(target_env = "musl", target_pointer_width = "64"))]
+#[global_allocator]
+static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+
 #[derive(Clone, Copy)]
 pub(crate) enum UseCargoMetadata {
     Yes,

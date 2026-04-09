@@ -24,6 +24,12 @@ serde = "1.0.228"
 toml_edit = "0.25.5"
 walkdir = "2.5.0"
 
+# musl's default allocator is very slow when used from multiple threads (e.g. rayon)
+#
+# see https://github.com/BurntSushi/ripgrep/issues/1268#issuecomment-486432534
+[target.'cfg(all(target_env = "musl", target_pointer_width = "64"))'.dependencies]
+tikv-jemallocator = { version = "0.6.1" }
+
 # Uncomment this for profiling.
 #[profile.release]
 #debug = true
