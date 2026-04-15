@@ -8,7 +8,6 @@
 
 - Bump the version in the `Cargo.toml` file.
 - Compile, to make sure the `Cargo.lock` file is updated.
-- Hardcode the new fixed version of the binary in the Github action.
 - Commit the changes and open a PR.
 - Once the PR passes CI, merge it.
 
