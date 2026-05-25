@@ -28,7 +28,7 @@ walkdir = "2.5.0"
 #
 # see https://github.com/BurntSushi/ripgrep/issues/1268#issuecomment-486432534
 [target.'cfg(all(target_env = "musl", target_pointer_width = "64"))'.dependencies]
-tikv-jemallocator = { version = "0.6.1" }
+tikv-jemallocator = { version = "0.7.0" }
 
 # Uncomment this for profiling.
 #[profile.release]
