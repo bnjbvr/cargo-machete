@@ -21,7 +21,7 @@ log = "0.4.30"
 pretty_env_logger = "0.5.0"
 rayon = "1.11.0"
 serde = "1.0.228"
-toml_edit = "0.25.5"
+toml_edit = "0.25.12"
 walkdir = "2.5.0"
 
 # musl's default allocator is very slow when used from multiple threads (e.g. rayon)
