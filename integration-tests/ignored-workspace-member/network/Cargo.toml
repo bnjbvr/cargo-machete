@@ -1,0 +1,8 @@
+[package]
+name = "network"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tokio = "1.0"
+serde = "1.0"

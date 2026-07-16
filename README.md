@@ -79,6 +79,23 @@ flag, which will call `cargo metadata --all-features` to find final dependency
 names, more accurate dependencies per build type, etc. ⚠ This may modify the
 `Cargo.lock` files in your projects.
 
+#### Skipping workspace members
+
+Sometimes you may want to exclude entire workspace members from analysis such as when using [`cargo-hakari`](https://crates.io/crates/cargo-hakari) which creates a workspace hack that intentionally list many dependencies to optimize build times, but these dependencies may not be directly used in the hack crate's source code.
+You can skip workspace members using either the CLI flag or the workspace's metadata:
+
+```bash
+# Skip specific workspace members via CLI
+cargo machete --skip-workspace-members member1,member2,member3
+```
+
+Or add them to your workspace `Cargo.toml`:
+
+```toml
+[workspace.metadata.cargo-machete]
+skip-workspace-members = ["member1", "member2", "member3"]
+```
+
 ### Renamed crates
 
 Some crates have a different import name, than their dependency name (e.g.

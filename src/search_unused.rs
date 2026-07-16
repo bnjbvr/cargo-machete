@@ -44,6 +44,10 @@ mod meta {
         /// name (e.g. `rustls-webpki` is imported with `use webpki;`).
         #[serde(default)]
         pub renamed: BTreeMap<Box<str>, Box<str>>,
+
+        /// Workspace members to skip during analysis.
+        #[serde(default, rename = "skip-workspace-members")]
+        pub skip_workspace_members: Vec<String>,
     }
 }
 
@@ -317,6 +321,7 @@ fn get_full_manifest(
 pub(crate) fn find_unused(
     manifest_path: &Path,
     with_cargo_metadata: UseCargoMetadata,
+    skip_workspace_members: &[String],
 ) -> anyhow::Result<Option<PackageAnalysis>> {
     let mut dir_path = manifest_path.to_path_buf();
     dir_path.pop();
@@ -329,6 +334,18 @@ pub(crate) fn find_unused(
         Some(ref package) => package.name.clone(),
         None => return Ok(None),
     };
+
+    // Check if this workspace member should be skipped
+    let should_skip = skip_workspace_members.contains(&package_name)
+        || workspace_metadata
+            .as_ref()
+            .map(|meta| meta.skip_workspace_members.contains(&package_name))
+            .unwrap_or(false);
+
+    if should_skip {
+        debug!("skipping {package_name} as it's in skip-workspace-members list");
+        return Ok(None);
+    }
 
     debug!("handling {} ({})", package_name, dir_path.display());
 
@@ -432,7 +449,11 @@ pub(crate) fn find_unused(
     let renamed = meta.map(|meta| &meta.renamed).unwrap_or(&NO_RENAMED);
 
     let (workspace_ignored, workspace_renamed): (HashSet<_>, _) = workspace_metadata
-        .map(|MetadataFields { ignored, renamed }| (HashSet::from_iter(ignored), renamed))
+        .map(
+            |MetadataFields {
+                 ignored, renamed, ..
+             }| (HashSet::from_iter(ignored), renamed),
+        )
         .unwrap_or_default();
 
     enum SingleDepResult {
@@ -773,6 +794,7 @@ fn check_analysis<F: Fn(PackageAnalysis)>(rel_path: &str, callback: F) {
         let analysis = find_unused(
             &PathBuf::from(TOP_LEVEL).join(rel_path),
             *use_cargo_metadata,
+            &[],
         )
         .expect("find_unused must return an Ok result")
         .expect("no error during processing");
@@ -857,6 +879,7 @@ fn test_renamed_field_works() -> anyhow::Result<()> {
     let analysis = find_unused(
         &PathBuf::from(TOP_LEVEL).join("./integration-tests/renamed-dep/Cargo.toml"),
         UseCargoMetadata::No,
+        &[],
     )?
     .expect("no error during processing");
     assert_eq!(analysis.unused.as_slice(), &["bytes", "log"]);
@@ -871,6 +894,7 @@ fn test_renamed_field_workspace_works() -> anyhow::Result<()> {
         &PathBuf::from(TOP_LEVEL)
             .join("./integration-tests/renamed-dep-workspace/inner/Cargo.toml"),
         UseCargoMetadata::No,
+        &[],
     )?
     .expect("no error during processing");
     assert_eq!(analysis.unused.as_slice(), &["bytes", "flagset"]);
@@ -884,6 +908,7 @@ fn test_crate_renaming_works() -> anyhow::Result<()> {
     let analysis = find_unused(
         &PathBuf::from(TOP_LEVEL).join("./integration-tests/renaming-works/Cargo.toml"),
         UseCargoMetadata::Yes,
+        &[],
     )?
     .expect("no error during processing");
     assert!(analysis.unused.is_empty());
@@ -892,6 +917,7 @@ fn test_crate_renaming_works() -> anyhow::Result<()> {
     let analysis = find_unused(
         &PathBuf::from(TOP_LEVEL).join("./integration-tests/renaming-works/Cargo.toml"),
         UseCargoMetadata::No,
+        &[],
     )?
     .expect("no error during processing");
     assert_eq!(analysis.unused, &["xml-rs".to_string()]);
@@ -906,6 +932,7 @@ fn test_unused_renamed_in_registry() -> anyhow::Result<()> {
     let analysis = find_unused(
         &PathBuf::from(TOP_LEVEL).join("./integration-tests/unused-renamed-in-registry/Cargo.toml"),
         UseCargoMetadata::Yes,
+        &[],
     )?
     .expect("no error during processing");
     assert_eq!(analysis.unused, &["xml-rs".to_string()]);
@@ -920,6 +947,7 @@ fn test_unused_renamed_in_spec() -> anyhow::Result<()> {
     let analysis = find_unused(
         &PathBuf::from(TOP_LEVEL).join("./integration-tests/unused-renamed-in-spec/Cargo.toml"),
         UseCargoMetadata::Yes,
+        &[],
     )?
     .expect("no error during processing");
     assert_eq!(analysis.unused, &["tracing".to_string()]);
@@ -933,6 +961,7 @@ fn test_unused_kebab_spec() -> anyhow::Result<()> {
     let analysis = find_unused(
         &PathBuf::from(TOP_LEVEL).join("./integration-tests/unused-kebab-spec/Cargo.toml"),
         UseCargoMetadata::Yes,
+        &[],
     )?
     .expect("no error during processing");
     assert_eq!(analysis.unused, &["log-once".to_string()]);
@@ -976,7 +1005,7 @@ fn test_workspace_from_relative_path() {
     .unwrap();
 
     let path = Path::new("./Cargo.toml");
-    let analysis = find_unused(path, UseCargoMetadata::No);
+    let analysis = find_unused(path, UseCargoMetadata::No, &[]);
 
     // Reset the current directory *before* running any other check.
     set_current_dir(prev_cwd).unwrap();
@@ -994,9 +1023,53 @@ fn test_multi_key_dep() {
     let analysis = find_unused(
         &PathBuf::from(TOP_LEVEL).join("./integration-tests/multi-key-dep/Cargo.toml"),
         UseCargoMetadata::Yes,
+        &[],
     )
     .expect("find_unused must return an Ok result")
     .expect("no error during processing");
 
     assert_eq!(analysis.unused, &["cc".to_string(), "rand".to_string()]);
+}
+
+#[test]
+fn test_skip_workspace_members_cli() {
+    let analysis = find_unused(
+        &PathBuf::from(TOP_LEVEL)
+            .join("./integration-tests/ignored-workspace-member/math/Cargo.toml"),
+        UseCargoMetadata::No,
+        &["math".to_string()],
+    );
+
+    assert!(
+        analysis
+            .expect("find_unused must return an Ok result")
+            .is_none()
+    );
+
+    let analysis = find_unused(
+        &PathBuf::from(TOP_LEVEL)
+            .join("./integration-tests/ignored-workspace-member/math/Cargo.toml"),
+        UseCargoMetadata::No,
+        &[],
+    )
+    .expect("find_unused must return an Ok result")
+    .expect("analysis should be present when not skipping");
+
+    assert_eq!(analysis.unused, &["log".to_string()]);
+}
+
+#[test]
+fn test_skip_workspace_members_metadata() {
+    let analysis = find_unused(
+        &PathBuf::from(TOP_LEVEL)
+            .join("./integration-tests/ignored-workspace-member/network/Cargo.toml"),
+        UseCargoMetadata::No,
+        &[],
+    );
+
+    assert!(
+        analysis
+            .expect("find_unused must return an Ok result")
+            .is_none()
+    );
 }
