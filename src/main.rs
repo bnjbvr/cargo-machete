@@ -62,6 +62,10 @@ struct MacheteArgs {
     #[argh(switch)]
     version: bool,
 
+    /// suppress progress and informational output.
+    #[argh(switch, short = 'q')]
+    quiet: bool,
+
     /// paths to directories that must be scanned.
     #[argh(positional, greedy)]
     paths: Vec<PathBuf>,
@@ -139,18 +143,24 @@ fn run_machete() -> anyhow::Result<bool> {
         std::process::exit(0);
     }
 
-    if args.paths.is_empty() {
-        eprintln!("Analyzing dependencies of crates in this directory...");
+    let has_no_paths = args.paths.is_empty();
+    if has_no_paths {
         args.paths.push(PathBuf::from("."));
-    } else {
-        eprintln!(
-            "Analyzing dependencies of crates in {}...",
-            args.paths
-                .iter()
-                .map(|path| path.as_os_str().to_string_lossy().to_string())
-                .collect::<Vec<_>>()
-                .join(",")
-        );
+    }
+
+    if !args.quiet {
+        if has_no_paths {
+            eprintln!("Analyzing dependencies of crates in this directory...");
+        } else {
+            eprintln!(
+                "Analyzing dependencies of crates in {}...",
+                args.paths
+                    .iter()
+                    .map(|path| path.as_os_str().to_string_lossy().to_string())
+                    .collect::<Vec<_>>()
+                    .join(",")
+            );
+        }
     }
 
     let mut has_unused_dependencies = false;
@@ -215,7 +225,11 @@ fn run_machete() -> anyhow::Result<bool> {
         };
 
         if results.is_empty() {
-            println!("cargo-machete didn't find any unused dependencies in {location}. Good job!");
+            if !args.quiet {
+                println!(
+                    "cargo-machete didn't find any unused dependencies in {location}. Good job!"
+                );
+            }
             continue;
         }
 
@@ -261,7 +275,9 @@ fn run_machete() -> anyhow::Result<bool> {
         println!();
     }
 
-    eprintln!("Done!");
+    if !args.quiet {
+        eprintln!("Done!");
+    }
 
     if !walkdir_errors.is_empty() {
         anyhow::bail!(
