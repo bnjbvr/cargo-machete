@@ -104,6 +104,25 @@ rustls-webpki = "webpki"
 This ensures that if `rustls-webpki` is no longer used in the project,
 `cargo-machete` will be able to detect it (unlike with the `ignored` table).
 
+## JSON output
+
+The tool can emit output a JSON object with the result of the analysis, for the consumption of
+other programs, using the `--json` flag.
+
+```
+# Print the version.
+$ cargo machete --json --version
+> {"version":"0.9.2"}
+
+# When no unused dependencies are found:
+$ cargo machete --json ./integration-tests/with-bench/
+> {}
+
+# When some unused dependencies or ignored-unused dependencies are found:
+$ cargo machete --json ./integration-tests/just-unused/
+$ {"crates":[{"package_name":"just-unused","manifest_path":"./integration-tests/just-unused/Cargo.toml","unused":["log"],"ignored_used":[]}]}
+```
+
 ## Docker Image
 
 A docker image for cargo machete.
