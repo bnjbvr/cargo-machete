@@ -2,6 +2,13 @@
 
 set -eu
 
+# Don't reinstall cargo-machete if it's already in path.
+# Invalidating cached versions is left as an exercise to the reader.
+if command -v cargo-machete; then
+  echo "cargo-machete is already installed."
+  exit 0
+fi
+
 # Determine the Rust target triple using rustc.
 echo "Determining Rust target triple..."
 TRIPLE=$(rustc -vV | grep host | awk '{print $2}')
