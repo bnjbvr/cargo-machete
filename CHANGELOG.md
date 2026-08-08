@@ -4,6 +4,7 @@
   crate declared both as a normal and a build dependency is only removed from the tables where
   it's unused. The JSON output lists unused build dependencies separately, under `unused_build`
   (#127).
+- Added: report entries of `[workspace.dependencies]` that no member of the workspace inherits (#79).
 
 # 0.10.1 (released on 2026-11-15)
 

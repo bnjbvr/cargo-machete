@@ -10,7 +10,7 @@ use crate::metadata_cache::MetadataCache;
 use crate::printers::json::JsonPrinter;
 use crate::printers::stdout::StdoutPrinter;
 use crate::printers::{AnalyzedPaths, Printer};
-use crate::search_unused::{DepKind, UnusedDep, find_unused};
+use crate::search_unused::{DepKind, UnusedDep, find_unused, find_unused_workspaces};
 use anyhow::{Context, bail};
 use rayon::prelude::*;
 use std::env::current_dir;
@@ -179,17 +179,14 @@ fn run_machete() -> anyhow::Result<bool> {
 
         // Run analysis in parallel. This will spawn new rayon tasks when dependencies are effectively
         // used by any Rust crate.
-        let results = manifest_path_entries
+        //
+        // Packages with nothing unused are kept: they're still inheritors of their workspace's
+        // shared dependency table.
+        let analyses = manifest_path_entries
             .par_iter()
             .filter_map(
                 |manifest_path| match find_unused(manifest_path, metadata_cache) {
-                    Ok(Some(analysis)) => {
-                        if analysis.unused.is_empty() {
-                            None
-                        } else {
-                            Some((analysis, manifest_path))
-                        }
-                    }
+                    Ok(Some(analysis)) => Some((analysis, manifest_path)),
 
                     Ok(None) => {
                         log::info!(
@@ -207,14 +204,32 @@ fn run_machete() -> anyhow::Result<bool> {
             )
             .collect::<Vec<_>>();
 
-        has_unused_dependencies = has_unused_dependencies || !results.is_empty();
+        let workspace_results = find_unused_workspaces(
+            analyses.iter().map(|(analysis, path)| (analysis, *path)),
+            &manifest_path_entries,
+        )?;
+
+        let results = analyses
+            .into_iter()
+            .filter(|(analysis, _)| !analysis.unused.is_empty())
+            .collect::<Vec<_>>();
+
+        has_unused_dependencies =
+            has_unused_dependencies || !results.is_empty() || !workspace_results.is_empty();
 
         // Display all the results.
-        printer.print_results(&path, &results)?;
+        printer.print_results(&path, &results, &workspace_results)?;
 
         if args.fix {
             for (analysis, path) in &results {
                 let fixed = remove_dependencies(&fs::read_to_string(path)?, &analysis.unused)?;
+                fs::write(path, fixed).expect("Cargo.toml write error");
+            }
+
+            for analysis in &workspace_results {
+                let path = &analysis.manifest_path;
+                let fixed =
+                    remove_workspace_dependencies(&fs::read_to_string(path)?, &analysis.unused)?;
                 fs::write(path, fixed).expect("Cargo.toml write error");
             }
         }
@@ -306,6 +321,24 @@ fn remove_dependencies(manifest: &str, dependency_list: &[UnusedDep]) -> anyhow:
 
     let serialized = manifest.to_string();
     Ok(serialized)
+}
+
+fn remove_workspace_dependencies(
+    manifest: &str,
+    dependency_list: &[String],
+) -> anyhow::Result<String> {
+    let mut manifest = toml_edit::DocumentMut::from_str(manifest)?;
+    let table = manifest
+        .get_mut("workspace")
+        .and_then(|workspace| workspace.get_mut("dependencies"))
+        .and_then(|deps| deps.as_table_like_mut())
+        .context("workspace.dependencies")?;
+    for dep in dependency_list {
+        table
+            .remove(dep)
+            .with_context(|| format!("{dep} not found in workspace.dependencies"))?;
+    }
+    Ok(manifest.to_string())
 }
 
 fn main() {
@@ -435,4 +468,29 @@ rand = "0.8.5"
     assert_eq!(keys(&stripped_manifest["dependencies"]), ["log"]);
     assert_eq!(keys(&unix["dependencies"]), ["log"]);
     assert_eq!(keys(&unix["build-dependencies"]), ["rand"]);
+}
+
+#[test]
+fn test_remove_workspace_dependencies() {
+    let manifest = r#"[package]
+name = "root"
+
+[workspace.dependencies]
+log = "0.4.14"
+
+[dependencies]
+log = "0.4.14"
+"#;
+    let stripped_manifest = remove_workspace_dependencies(manifest, &["log".to_string()]).unwrap();
+    assert_eq!(
+        stripped_manifest,
+        r#"[package]
+name = "root"
+
+[workspace.dependencies]
+
+[dependencies]
+log = "0.4.14"
+"#
+    );
 }

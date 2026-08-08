@@ -9,7 +9,7 @@ use log::{debug, trace, warn};
 use meta::MetadataFields;
 use rayon::prelude::*;
 use std::{
-    collections::{BTreeMap, HashSet},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     error::{self, Error},
     path::{Path, PathBuf},
 };
@@ -102,17 +102,18 @@ pub(crate) struct PackageAnalysis {
     pub package_name: String,
     pub unused: Vec<UnusedDep>,
     pub ignored_used: Vec<String>,
+
+    /// Path to the manifest of the workspace this package takes part in, if any.
+    workspace_manifest_path: Option<PathBuf>,
+
+    /// Dependency keys this package pulls in with `{ workspace = true }`.
+    inherited: Vec<String>,
 }
 
-impl PackageAnalysis {
-    fn new(package_name: String, manifest: cargo_toml::Manifest<meta::PackageMetadata>) -> Self {
-        Self {
-            manifest,
-            package_name,
-            unused: Vec::default(),
-            ignored_used: Vec::default(),
-        }
-    }
+/// Unused entries of a `[workspace.dependencies]` table.
+pub(crate) struct WorkspaceAnalysis {
+    pub manifest_path: PathBuf,
+    pub unused: Vec<String>,
 }
 
 fn make_line_regexp(name: &str) -> String {
@@ -300,6 +301,35 @@ struct FullManifest {
 
     /// If the crate was part of a workspace, path to the workspace manifest.
     workspace_manifest_path: Option<PathBuf>,
+
+    /// Dependency keys the crate pulls in with `{ workspace = true }`.
+    inherited: Vec<String>,
+}
+
+/// Dependency keys the manifest pulls in with `{ workspace = true }`.
+///
+/// Only readable before [`cargo_toml::Manifest::complete_from_path_and_workspace`], which rewrites
+/// inherited entries into detailed ones and erases the marker.
+fn inherited_deps(manifest: &cargo_toml::Manifest<PackageMetadata>) -> Vec<String> {
+    let per_target = manifest.target.values().flat_map(|target| {
+        target
+            .dependencies
+            .iter()
+            .chain(&target.dev_dependencies)
+            .chain(&target.build_dependencies)
+    });
+
+    manifest
+        .dependencies
+        .iter()
+        .chain(&manifest.dev_dependencies)
+        .chain(&manifest.build_dependencies)
+        .chain(per_target)
+        .filter(
+            |(_, dep)| matches!(dep, cargo_toml::Dependency::Inherited(detail) if detail.workspace),
+        )
+        .map(|(name, _)| name.clone())
+        .collect()
 }
 
 /// Read a manifest and try to find a workspace manifest to complete the data available in the
@@ -317,6 +347,8 @@ fn get_full_manifest(dir_path: &Path, manifest_path: &Path) -> anyhow::Result<Fu
     let cargo_toml_content = std::fs::read(manifest_path)?;
     let mut manifest =
         cargo_toml::Manifest::<PackageMetadata>::from_slice_with_metadata(&cargo_toml_content)?;
+
+    let inherited = inherited_deps(&manifest);
 
     let mut ws_manifest = None;
     let mut ws_path = None;
@@ -364,6 +396,7 @@ fn get_full_manifest(dir_path: &Path, manifest_path: &Path) -> anyhow::Result<Fu
         workspace_metadata: ws_manifest
             .and_then(|manifest| manifest.workspace?.metadata?.cargo_machete),
         workspace_manifest_path: ws_path,
+        inherited,
     })
 }
 
@@ -422,6 +455,121 @@ fn search_dep(
     }
 }
 
+/// Report the entries of `[workspace.dependencies]` tables that no member of their workspace
+/// inherits.
+///
+/// `analyses` are the analyzed packages, along with the manifest path they were walked under, out
+/// of all the walked `manifest_paths`.
+///
+/// A workspace is only reported when its root was walked, and every member cargo lists for it was
+/// analyzed: a missing member could be the one inheriting an entry.
+pub(crate) fn find_unused_workspaces<'a>(
+    analyses: impl IntoIterator<Item = (&'a PackageAnalysis, &'a PathBuf)>,
+    manifest_paths: &[PathBuf],
+) -> anyhow::Result<Vec<WorkspaceAnalysis>> {
+    let canonical_of = manifest_paths
+        .iter()
+        .map(|walked| {
+            std::fs::canonicalize(walked)
+                .map(|canonical| (walked, canonical))
+                .with_context(|| format!("canonicalizing {}", walked.display()))
+        })
+        .collect::<anyhow::Result<HashMap<_, _>>>()?;
+    let walked_of: HashMap<&Path, &PathBuf> = canonical_of
+        .iter()
+        .map(|(walked, canonical)| (canonical.as_path(), *walked))
+        .collect();
+
+    let mut roots = BTreeSet::new();
+    let mut analyzed = HashMap::new();
+    for (analysis, walked_path) in analyses {
+        if let Some(root) = &analysis.workspace_manifest_path {
+            roots.insert(root.as_path());
+        }
+        analyzed.insert(
+            canonical_of[walked_path].as_path(), // analyses are a subset of the walked manifests
+            analysis.inherited.as_slice(),
+        );
+    }
+
+    let mut results = Vec::new();
+    for root in roots {
+        let report = std::fs::canonicalize(root)
+            .map_err(anyhow::Error::from)
+            .and_then(|canonical| match walked_of.get(canonical.as_path()) {
+                Some(walked_root) => find_unused_workspace_deps(walked_root, &analyzed),
+                None => {
+                    debug!(
+                        "{} is a workspace root outside the scanned paths",
+                        root.display()
+                    );
+                    Ok(None)
+                }
+            });
+        match report {
+            Ok(Some(analysis)) => results.push(analysis),
+            Ok(None) => {}
+            Err(err) => eprintln!("error when handling {}: {:#}", root.display(), err),
+        }
+    }
+    Ok(results)
+}
+
+fn find_unused_workspace_deps(
+    manifest_path: &Path,
+    analyzed: &HashMap<&Path, &[String]>,
+) -> anyhow::Result<Option<WorkspaceAnalysis>> {
+    let manifest = cargo_toml::Manifest::<PackageMetadata>::from_slice_with_metadata(
+        &std::fs::read(manifest_path)?,
+    )?;
+    let workspace = manifest
+        .workspace
+        .context("workspace manifest without a [workspace] table")?;
+
+    if workspace.dependencies.is_empty() {
+        return Ok(None);
+    }
+
+    // Cargo resolves membership itself: globs, `exclude`, and path dependencies as implicit members.
+    let metadata = cargo_metadata::MetadataCommand::new()
+        .no_deps()
+        .manifest_path(manifest_path)
+        .exec()?;
+
+    let mut inherited = HashSet::new();
+    for member in metadata.workspace_packages() {
+        let member_path = std::fs::canonicalize(&member.manifest_path)?;
+        let Some(member_inherited) = analyzed.get(member_path.as_path()) else {
+            warn!(
+                "skipping the [workspace.dependencies] of {}: member {} wasn't analyzed",
+                manifest_path.display(),
+                member.manifest_path
+            );
+            return Ok(None);
+        };
+        inherited.extend(member_inherited.iter().map(String::as_str));
+    }
+
+    let ignored: HashSet<&str> = workspace
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.cargo_machete.as_ref())
+        .map(|meta| meta.ignored.iter().map(String::as_str).collect())
+        .unwrap_or_default();
+
+    let unused: Vec<String> = workspace
+        .dependencies
+        .keys()
+        .filter(|name| !inherited.contains(name.as_str()) && !ignored.contains(name.as_str()))
+        .cloned()
+        .collect();
+
+    Ok((!unused.is_empty()).then(|| WorkspaceAnalysis {
+        manifest_path: manifest_path.to_owned(),
+        unused,
+    }))
+}
+
 pub(crate) fn find_unused(
     manifest_path: &Path,
     metadata_cache: Option<&MetadataCache>,
@@ -440,7 +588,14 @@ pub(crate) fn find_unused(
 
     debug!("handling {} ({})", package_name, dir_path.display());
 
-    let mut analysis = PackageAnalysis::new(package_name, full_manifest.manifest);
+    let mut analysis = PackageAnalysis {
+        manifest: full_manifest.manifest,
+        package_name,
+        unused: Vec::default(),
+        ignored_used: Vec::default(),
+        workspace_manifest_path: full_manifest.workspace_manifest_path.clone(),
+        inherited: full_manifest.inherited,
+    };
 
     let paths = collect_paths(&dir_path, &analysis);
 
@@ -908,6 +1063,68 @@ fn check_analysis<F: Fn(PackageAnalysis)>(rel_path: &str, callback: F) {
             .expect("no error during processing");
         callback(analysis);
     }
+}
+
+/// Walk `rel_root` like a real run does, skipping the `skip` directories, and check what's reported
+/// as unused in `[workspace.dependencies]`.
+#[cfg(test)]
+#[track_caller]
+fn check_workspaces(rel_root: &str, skip: &[&str], expected_unused: &[&str]) {
+    use crate::discover_manifest::{CollectPathOptions, collect_paths};
+
+    let top_level = PathBuf::from(TOP_LEVEL);
+    let manifest_paths = collect_paths(
+        &top_level.join(rel_root),
+        CollectPathOptions {
+            skip_patterns: Vec::new(),
+            exact_skip_paths: skip
+                .iter()
+                .map(|dir| std::fs::canonicalize(top_level.join(dir)).unwrap())
+                .collect(),
+            respect_ignore_files: true,
+            override_respect_git_ignore: None,
+        },
+    )
+    .unwrap();
+
+    let analyses: Vec<_> = manifest_paths
+        .iter()
+        .filter_map(|path| Some((find_unused(path, None).unwrap()?, path)))
+        .collect();
+
+    let unused: Vec<String> =
+        find_unused_workspaces(analyses.iter().map(|(a, p)| (a, *p)), &manifest_paths)
+            .unwrap()
+            .into_iter()
+            .flat_map(|workspace| workspace.unused)
+            .collect();
+    assert_eq!(unused, expected_unused);
+}
+
+#[test]
+fn test_unused_workspace_dep() {
+    // `rand` is inherited by nobody; `serde` neither, but it's ignored; `log` is inherited.
+    check_workspaces("integration-tests/unused-workspace-dep", &[], &["rand"]);
+}
+
+#[test]
+fn test_workspace_member_skipped() {
+    // `inner`, the only inheritor of `log`, is skipped while the `crates/*` members aren't.
+    check_workspaces(
+        "integration-tests/unused-workspace-dep",
+        &["integration-tests/unused-workspace-dep/inner"],
+        &[],
+    );
+}
+
+#[test]
+fn test_workspace_root_outside_scan() {
+    check_workspaces("integration-tests/unused-workspace-dep/inner", &[], &[]);
+}
+
+#[test]
+fn test_ignored_dep_workspace_reports_uninherited() {
+    check_workspaces("integration-tests/ignored-dep-workspace", &[], &["log"]);
 }
 
 #[test]
