@@ -53,6 +53,25 @@ The **return code** gives an indication whether unused dependencies have been fo
 
 This can be used in CI situations.
 
+### Skipping directories
+
+By default cargo-machete descends into every subdirectory looking for `Cargo.toml` files. If you
+have crates you don't want analyzed — for example a `tests` directory full of small standalone
+fixture crates that intentionally carry unused dependencies — you can prune them from the walk with
+`--skip`:
+
+```bash
+# skip every `tests` directory found
+cargo machete --skip tests
+
+# --skip can be passed multiple times
+cargo machete --skip tests --skip examples
+```
+
+`--skip` matches on trailing path components, the same way `--skip-target-dir` matches `target/`, so
+`--skip crates/foo` skips any directory whose path ends with `crates/foo`. A leading `./` is
+ignored, so `--skip ./tests` and `--skip tests` behave identically.
+
 ### False positives
 
 To ignore a certain set of dependencies in a crate, add
