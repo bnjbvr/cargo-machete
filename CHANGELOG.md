@@ -1,5 +1,6 @@
 # unreleased
 
+- Added: `--skip` flag to prune directories from the walk, matched on trailing path components (e.g. `--skip tests`); may be passed multiple times (#94).
 - Improved: add `renamed` table to track renamed crates (#152 #153).
 
 # 0.7.0 (released on 2024-09-25)
