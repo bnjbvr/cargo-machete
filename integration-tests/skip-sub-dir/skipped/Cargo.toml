@@ -1,0 +1,9 @@
+[package]
+name = "skipped-sub-crate"
+version = "0.1.0"
+edition = "2021"
+
+# This crate intentionally has an unused dependency. When the parent `skipped`
+# directory is passed to `--skip`, this manifest should never be collected.
+[dependencies]
+log = "0.4.14"
