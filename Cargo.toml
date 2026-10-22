@@ -31,6 +31,8 @@ walkdir = "2.5.0"
 [target.'cfg(all(target_env = "musl", target_pointer_width = "64"))'.dependencies]
 tikv-jemallocator = { version = "0.7.0" }
 
-# Uncomment this for profiling.
-#[profile.release]
-#debug = true
+[profile.release]
+codegen-units = 1
+lto = "thin"
+strip = true
+#debug = true # Uncomment this for profiling
