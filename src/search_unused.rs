@@ -1,4 +1,4 @@
-use cargo_metadata::CargoOpt;
+use cargo_metadata::{CargoOpt, DependencyKind};
 use grep::{
     matcher::LineTerminator,
     regex::{RegexMatcher, RegexMatcherBuilder},
@@ -314,6 +314,61 @@ fn get_full_manifest(
     ))
 }
 
+enum SingleDepResult {
+    /// Dependency is unused and not marked as ignored.
+    Unused(String),
+    /// Dependency is marked as ignored but used.
+    IgnoredButUsed(String),
+}
+
+/// Search `dep_name`/`crate_name` against a set of paths and classify the result.
+fn search_dep(
+    dep_name: String,
+    crate_name: String,
+    search_paths: &[PathBuf],
+    ignored: &HashSet<&String>,
+    workspace_ignored: &HashSet<String>,
+    renamed: &BTreeMap<Box<str>, Box<str>>,
+    workspace_renamed: &BTreeMap<Box<str>, Box<str>>,
+) -> Option<SingleDepResult> {
+    // If the crate was renamed (in the current Cargo.toml), use the renamed name.
+    let crate_name = renamed
+        .get(dep_name.as_str())
+        // Also try to look up the renames in the custom workspace metadata
+        .or_else(|| workspace_renamed.get(dep_name.as_str()))
+        // fall-back to the crate name
+        .map_or(crate_name.as_str(), Box::as_ref);
+
+    let mut search = Search::new(crate_name).expect("constructing grep context");
+
+    let mut found_once = false;
+    for path in search_paths {
+        trace!("looking for {} in {}", crate_name, path.to_string_lossy());
+        match search.search_path(path) {
+            Ok(true) => {
+                found_once = true;
+                break;
+            }
+            Ok(false) => {}
+            Err(err) => {
+                eprintln!("{}: {}", path.display(), err);
+            }
+        };
+    }
+
+    if !found_once {
+        if ignored.contains(&dep_name) || workspace_ignored.contains(&dep_name) {
+            return None;
+        }
+        Some(SingleDepResult::Unused(dep_name))
+    } else {
+        if ignored.contains(&dep_name) {
+            return Some(SingleDepResult::IgnoredButUsed(dep_name));
+        }
+        None
+    }
+}
+
 pub(crate) fn find_unused(
     manifest_path: &Path,
     with_cargo_metadata: UseCargoMetadata,
@@ -341,38 +396,48 @@ pub(crate) fn find_unused(
 
     let paths = collect_paths(&dir_path, &analysis);
 
-    // TODO extend to dev dependencies + build dependencies, and be smarter in the grouping of
-    // searched paths
+    // Resolve the build script path, if any.
+    // After `complete_from_path`, package.build is set to Some(OptionalFile::Path(...))
+    // when a build script exists (defaulting to "build.rs").
+    let build_script_path: Option<PathBuf> = analysis
+        .manifest
+        .package
+        .as_ref()
+        .and_then(|pkg| pkg.build.as_ref())
+        .and_then(|build| build.as_path())
+        .map(|p| dir_path.join(p));
+
+    // TODO extend to dev dependencies, and be smarter in the grouping of searched paths
     // Maps dependency name (the name of the key in the Cargo.toml dependency
     // table, can have dashes, not necessarily the name in the crate registry)
     // to crate name (extern crate, snake case)
-    let dependencies: BTreeMap<String, String> = if let Some((metadata, resolve)) = analysis
-        .metadata
-        .as_ref()
-        .and_then(|metadata| metadata.resolve.as_ref().map(|resolve| (metadata, resolve)))
-    {
-        if let Some(ref root) = resolve.root {
-            // This gives us resolved dependencies, in crate form
-            let root_node = resolve
-                .nodes
-                .iter()
-                .find(|node| node.id == *root)
-                .expect("root should be resolved by cargo-metadata");
-            // This gives us the original dependency table
-            // May have more than resolved if some were never enabled
-            let root_package = metadata
-                .packages
-                .iter()
-                .find(|pkg| pkg.id == *root)
-                .expect("root should appear under cargo-metadata packages");
-            // For every resolved dependency:
-            // look it up in the package list to find the name (the one in registries)
-            // look up that name in dependencies of the root_package;
-            // find if it uses a different key through the rename field
-            root_node
-                .deps
-                .iter()
-                .map(|dep| {
+    let (dependencies, build_dependencies): (BTreeMap<String, String>, BTreeMap<String, String>) =
+        if let Some((metadata, resolve)) = analysis
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.resolve.as_ref().map(|resolve| (metadata, resolve)))
+        {
+            if let Some(ref root) = resolve.root {
+                // This gives us resolved dependencies, in crate form
+                let root_node = resolve
+                    .nodes
+                    .iter()
+                    .find(|node| node.id == *root)
+                    .expect("root should be resolved by cargo-metadata");
+                // This gives us the original dependency table
+                // May have more than resolved if some were never enabled
+                let root_package = metadata
+                    .packages
+                    .iter()
+                    .find(|pkg| pkg.id == *root)
+                    .expect("root should appear under cargo-metadata packages");
+                // For every resolved dependency:
+                // look it up in the package list to find the name (the one in registries)
+                // look up that name in dependencies of the root_package;
+                // find if it uses a different key through the rename field
+                let mut normal_deps = BTreeMap::new();
+                let mut build_deps = BTreeMap::new();
+                for dep in &root_node.deps {
                     let crate_name = dep.name.clone();
                     let dep_pkg = metadata
                         .packages
@@ -400,21 +465,38 @@ pub(crate) fn find_unused(
                         .rename
                         .clone()
                         .unwrap_or_else(|| dep_spec.name.clone());
-                    (dep_key, crate_name)
-                })
-                .collect()
+
+                    // Classify by kind: build deps go into build_deps, others into normal_deps.
+                    let is_build_only = dep
+                        .dep_kinds
+                        .iter()
+                        .all(|k| k.kind == DependencyKind::Build);
+                    if is_build_only {
+                        build_deps.insert(dep_key, crate_name);
+                    } else {
+                        normal_deps.insert(dep_key, crate_name);
+                    }
+                }
+                (normal_deps, build_deps)
+            } else {
+                // No root -> virtual workspace, empty maps
+                Default::default()
+            }
         } else {
-            // No root -> virtual workspace, empty map
-            Default::default()
-        }
-    } else {
-        analysis
-            .manifest
-            .dependencies
-            .keys()
-            .map(|k| (k.clone(), k.replace('-', "_")))
-            .collect()
-    };
+            let normal_deps = analysis
+                .manifest
+                .dependencies
+                .keys()
+                .map(|k| (k.clone(), k.replace('-', "_")))
+                .collect();
+            let build_deps = analysis
+                .manifest
+                .build_dependencies
+                .keys()
+                .map(|k| (k.clone(), k.replace('-', "_")))
+                .collect();
+            (normal_deps, build_deps)
+        };
 
     let meta = analysis
         .manifest
@@ -435,54 +517,18 @@ pub(crate) fn find_unused(
         .map(|MetadataFields { ignored, renamed }| (HashSet::from_iter(ignored), renamed))
         .unwrap_or_default();
 
-    enum SingleDepResult {
-        /// Dependency is unused and not marked as ignored.
-        Unused(String),
-        /// Dependency is marked as ignored but used.
-        IgnoredButUsed(String),
-    }
-
     let results: Vec<SingleDepResult> = dependencies
         .into_par_iter()
         .filter_map(|(dep_name, crate_name)| {
-            // If the crate was renamed (in the current Cargo.toml), use the renamed name.
-            let crate_name = renamed
-                .get(dep_name.as_str())
-                // Also try to look up the renames in the custom workspace metadata
-                .or_else(|| workspace_renamed.get(dep_name.as_str()))
-                // fall-back to the crate name
-                .map_or(crate_name.as_str(), Box::as_ref);
-
-            let mut search = Search::new(crate_name).expect("constructing grep context");
-
-            let mut found_once = false;
-            for path in &paths {
-                trace!("looking for {} in {}", crate_name, path.to_string_lossy(),);
-                match search.search_path(path) {
-                    Ok(true) => {
-                        found_once = true;
-                        break;
-                    }
-                    Ok(false) => {}
-                    Err(err) => {
-                        eprintln!("{}: {}", path.display(), err);
-                    }
-                };
-            }
-
-            if !found_once {
-                if ignored.contains(&dep_name) || workspace_ignored.contains(&dep_name) {
-                    return None;
-                }
-
-                Some(SingleDepResult::Unused(dep_name))
-            } else {
-                if ignored.contains(&dep_name) {
-                    return Some(SingleDepResult::IgnoredButUsed(dep_name));
-                }
-
-                None
-            }
+            search_dep(
+                dep_name,
+                crate_name,
+                &paths,
+                &ignored,
+                &workspace_ignored,
+                renamed,
+                &workspace_renamed,
+            )
         })
         .collect();
 
@@ -490,6 +536,34 @@ pub(crate) fn find_unused(
         match result {
             SingleDepResult::Unused(dep) => analysis.unused.push(dep),
             SingleDepResult::IgnoredButUsed(dep) => analysis.ignored_used.push(dep),
+        }
+    }
+
+    // Search build dependencies against the build script only.
+    if !build_dependencies.is_empty() {
+        let build_script_paths: Vec<PathBuf> =
+            build_script_path.filter(|p| p.exists()).into_iter().collect();
+
+        let build_results: Vec<SingleDepResult> = build_dependencies
+            .into_iter()
+            .filter_map(|(dep_name, crate_name)| {
+                search_dep(
+                    dep_name,
+                    crate_name,
+                    &build_script_paths,
+                    &ignored,
+                    &workspace_ignored,
+                    renamed,
+                    &workspace_renamed,
+                )
+            })
+            .collect();
+
+        for result in build_results {
+            match result {
+                SingleDepResult::Unused(dep) => analysis.unused.push(dep),
+                SingleDepResult::IgnoredButUsed(dep) => analysis.ignored_used.push(dep),
+            }
         }
     }
 
@@ -999,4 +1073,16 @@ fn test_multi_key_dep() {
     .expect("no error during processing");
 
     assert_eq!(analysis.unused, &["cc".to_string(), "rand".to_string()]);
+}
+
+#[test]
+fn test_build_dep_used_in_build_script() {
+    // A crate with [build-dependencies]: `log` is used in build.rs, `rand` is not.
+    // cargo-machete should report only `rand` as unused.
+    check_analysis(
+        "./integration-tests/build-dep-used/Cargo.toml",
+        |analysis| {
+            assert_eq!(analysis.unused, &["rand".to_string()]);
+        },
+    );
 }

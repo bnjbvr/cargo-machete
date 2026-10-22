@@ -1,0 +1,11 @@
+[package]
+name = "build-dep-used"
+version = "0.1.0"
+edition = "2021"
+
+
+[build-dependencies]
+# Used in build.rs via `use` statement.
+log = "0.4.14"
+# Not used anywhere — should be reported as unused.
+rand = "0.8.5"
