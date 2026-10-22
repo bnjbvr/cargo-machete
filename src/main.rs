@@ -7,7 +7,7 @@ use crate::printers::{AnalyzedPaths, Printer};
 use crate::search_unused::find_unused;
 use anyhow::{Context, bail};
 use rayon::prelude::*;
-use std::path::Path;
+use std::path::{Component, Path};
 use std::str::FromStr;
 use std::{fs, path::PathBuf};
 use toml_edit::{KeyMut, TableLike};
@@ -53,6 +53,12 @@ struct MacheteArgs {
     #[argh(switch)]
     skip_target_dir: bool,
 
+    /// don't analyze anything under directories matching this path. Matches on trailing path
+    /// components, like --skip-target-dir does for target/, so `--skip tests` skips every `tests`
+    /// directory found. May be passed multiple times.
+    #[argh(option)]
+    skip: Vec<PathBuf>,
+
     /// rewrite the Cargo.toml files to automatically remove unused dependencies.
     /// Note: all dependencies flagged by cargo-machete will be removed, including false positives.
     #[argh(switch)]
@@ -83,6 +89,10 @@ struct CollectPathOptions {
     /// Should we avoid scanning `target` directories?
     skip_target_dir: bool,
 
+    /// Directories to skip, matched on trailing path components (e.g. `tests` skips any `tests`
+    /// directory, `crates/foo` skips any directory whose path ends with `crates/foo`).
+    skip_paths: Vec<PathBuf>,
+
     /// Should we ignore files as specified in .gitignore (in the target directory, or any parent),
     /// and `.ignore`?
     respect_ignore_files: bool,
@@ -104,8 +114,25 @@ fn collect_paths(path: &Path, options: CollectPathOptions) -> Result<Vec<PathBuf
         builder.git_ignore(val);
     }
 
-    if options.skip_target_dir {
-        builder.filter_entry(|entry| !entry.path().ends_with("target"));
+    // Normalize the skip paths once, stripping any leading `./` so that `--skip ./tests` behaves
+    // the same as `--skip tests`. Empty paths (e.g. from `--skip .`) are dropped so they don't
+    // accidentally match every entry.
+    let skip_paths: Vec<PathBuf> = options
+        .skip_paths
+        .iter()
+        .map(|p| strip_leading_cur_dir(p))
+        .filter(|p| !p.as_os_str().is_empty())
+        .collect();
+
+    let skip_target_dir = options.skip_target_dir;
+    if skip_target_dir || !skip_paths.is_empty() {
+        builder.filter_entry(move |entry| {
+            let path = entry.path();
+            if skip_target_dir && path.ends_with("target") {
+                return false;
+            }
+            !skip_paths.iter().any(|skip| path.ends_with(skip))
+        });
     }
 
     let walker = builder.build();
@@ -120,6 +147,14 @@ fn collect_paths(path: &Path, options: CollectPathOptions) -> Result<Vec<PathBuf
                 .map_or(true, |entry| entry.file_name() == "Cargo.toml")
         })
         .map(|res_entry| res_entry.map(|e| e.into_path()))
+        .collect()
+}
+
+/// Strip any leading `./` components from a path, so a user-provided skip path like `./tests` is
+/// treated the same as `tests` when matched against trailing path components.
+fn strip_leading_cur_dir(path: &Path) -> PathBuf {
+    path.components()
+        .skip_while(|c| matches!(c, Component::CurDir))
         .collect()
 }
 
@@ -181,6 +216,7 @@ fn run_machete() -> anyhow::Result<bool> {
             &path,
             CollectPathOptions {
                 skip_target_dir: args.skip_target_dir,
+                skip_paths: args.skip.clone(),
                 respect_ignore_files: !args.no_ignore,
                 override_respect_git_ignore: None,
             },
@@ -342,6 +378,7 @@ fn test_ignore_target() {
         &PathBuf::from(TOP_LEVEL).join("./integration-tests/with-target/"),
         CollectPathOptions {
             skip_target_dir: true,
+            skip_paths: Vec::new(),
             respect_ignore_files: false,
             override_respect_git_ignore: Some(false),
         },
@@ -352,6 +389,7 @@ fn test_ignore_target() {
         &PathBuf::from(TOP_LEVEL).join("./integration-tests/with-target/"),
         CollectPathOptions {
             skip_target_dir: false,
+            skip_paths: Vec::new(),
             respect_ignore_files: true,
             override_respect_git_ignore: Some(false),
         },
@@ -362,11 +400,59 @@ fn test_ignore_target() {
         &PathBuf::from(TOP_LEVEL).join("./integration-tests/with-target/"),
         CollectPathOptions {
             skip_target_dir: false,
+            skip_paths: Vec::new(),
             respect_ignore_files: false,
             override_respect_git_ignore: Some(false),
         },
     );
     assert!(!entries.unwrap().is_empty());
+}
+
+#[test]
+fn test_skip_paths() {
+    let root = PathBuf::from(TOP_LEVEL).join("./integration-tests/skip-sub-dir/");
+
+    // Without any skip paths, both the top-level and the nested `skipped` manifest are collected.
+    let mut entries = collect_paths(
+        &root,
+        CollectPathOptions {
+            skip_target_dir: false,
+            skip_paths: Vec::new(),
+            respect_ignore_files: false,
+            override_respect_git_ignore: Some(false),
+        },
+    )
+    .unwrap();
+    entries.sort();
+    assert_eq!(entries.len(), 2);
+    assert!(entries.iter().any(|p| p.ends_with("skipped/Cargo.toml")));
+
+    // Skipping the `skipped` directory prunes it (and everything under it) from the walk.
+    let entries = collect_paths(
+        &root,
+        CollectPathOptions {
+            skip_target_dir: false,
+            skip_paths: vec![PathBuf::from("skipped")],
+            respect_ignore_files: false,
+            override_respect_git_ignore: Some(false),
+        },
+    )
+    .unwrap();
+    assert_eq!(entries.len(), 1);
+    assert!(!entries[0].ends_with("skipped/Cargo.toml"));
+
+    // A leading `./` is normalized away, so `./skipped` behaves the same as `skipped`.
+    let entries = collect_paths(
+        &root,
+        CollectPathOptions {
+            skip_target_dir: false,
+            skip_paths: vec![PathBuf::from("./skipped")],
+            respect_ignore_files: false,
+            override_respect_git_ignore: Some(false),
+        },
+    )
+    .unwrap();
+    assert_eq!(entries.len(), 1);
 }
 
 #[test]
