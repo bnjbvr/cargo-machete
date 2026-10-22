@@ -3,7 +3,7 @@ pub mod stdout;
 
 use std::path::{Path, PathBuf};
 
-use crate::search_unused::PackageAnalysis;
+use crate::search_unused::{PackageAnalysis, WorkspaceAnalysis};
 
 /// Which paths are going to be analyzed by machete?
 pub enum AnalyzedPaths<'a> {
@@ -32,6 +32,7 @@ pub trait Printer {
         &self,
         path: &Path,
         results: &'a [(PackageAnalysis, &'a PathBuf)],
+        workspaces: &'a [WorkspaceAnalysis],
     ) -> anyhow::Result<()>;
 
     /// Print the tail of the analysis, usually a "done" message, and the false positive explainer.

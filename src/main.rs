@@ -4,9 +4,10 @@ mod search_unused;
 use crate::printers::json::JsonPrinter;
 use crate::printers::stdout::StdoutPrinter;
 use crate::printers::{AnalyzedPaths, Printer};
-use crate::search_unused::find_unused;
+use crate::search_unused::{find_unused, find_unused_workspaces};
 use anyhow::{Context, bail};
 use rayon::prelude::*;
+use std::collections::HashMap;
 use std::path::Path;
 use std::str::FromStr;
 use std::{fs, path::PathBuf};
@@ -200,17 +201,14 @@ fn run_machete() -> anyhow::Result<bool> {
 
         // Run analysis in parallel. This will spawn new rayon tasks when dependencies are effectively
         // used by any Rust crate.
-        let results = manifest_path_entries
+        //
+        // Packages with nothing unused are kept: they're still inheritors of their workspace's
+        // shared dependency table.
+        let analyses = manifest_path_entries
             .par_iter()
             .filter_map(
                 |manifest_path| match find_unused(manifest_path, with_metadata) {
-                    Ok(Some(analysis)) => {
-                        if analysis.unused.is_empty() {
-                            None
-                        } else {
-                            Some((analysis, manifest_path))
-                        }
-                    }
+                    Ok(Some(analysis)) => Some((analysis, manifest_path)),
 
                     Ok(None) => {
                         log::info!(
@@ -228,14 +226,46 @@ fn run_machete() -> anyhow::Result<bool> {
             )
             .collect::<Vec<_>>();
 
-        has_unused_dependencies = has_unused_dependencies || !results.is_empty();
+        let scanned_manifests = manifest_path_entries
+            .iter()
+            .map(|entry| {
+                fs::canonicalize(entry)
+                    .map(|canonical| (canonical, entry.clone()))
+                    .with_context(|| format!("canonicalizing {}", entry.display()))
+            })
+            .collect::<anyhow::Result<HashMap<_, _>>>()?;
+
+        let workspace_results =
+            find_unused_workspaces(analyses.iter().map(|(a, _)| a), &scanned_manifests)?;
+
+        let results = analyses
+            .into_iter()
+            .filter(|(analysis, _)| !analysis.unused.is_empty())
+            .collect::<Vec<_>>();
+
+        has_unused_dependencies =
+            has_unused_dependencies || !results.is_empty() || !workspace_results.is_empty();
 
         // Display all the results.
-        printer.print_results(&path, &results)?;
+        printer.print_results(&path, &results, &workspace_results)?;
 
         if args.fix {
             for (analysis, path) in &results {
-                let fixed = remove_dependencies(&fs::read_to_string(path)?, &analysis.unused)?;
+                let fixed = remove_dependencies(
+                    &fs::read_to_string(path)?,
+                    &analysis.unused,
+                    DependencyScope::Package,
+                )?;
+                fs::write(path, fixed).expect("Cargo.toml write error");
+            }
+
+            for analysis in &workspace_results {
+                let path = &analysis.manifest_path;
+                let fixed = remove_dependencies(
+                    &fs::read_to_string(path)?,
+                    &analysis.unused,
+                    DependencyScope::Workspace,
+                )?;
                 fs::write(path, fixed).expect("Cargo.toml write error");
             }
         }
@@ -291,10 +321,32 @@ fn get_dependency_tables(
     Ok(matched_tables)
 }
 
-fn remove_dependencies(manifest: &str, dependency_list: &[String]) -> anyhow::Result<String> {
+/// Which dependency tables of a manifest `--fix` may strip from.
+#[derive(Clone, Copy)]
+enum DependencyScope {
+    /// The manifest's own `[dependencies]` and friends.
+    Package,
+    /// The `[workspace.dependencies]` table shared with the members.
+    Workspace,
+}
+
+fn remove_dependencies(
+    manifest: &str,
+    dependency_list: &[String],
+    scope: DependencyScope,
+) -> anyhow::Result<String> {
     let mut manifest = toml_edit::DocumentMut::from_str(manifest)?;
 
-    let mut matched_tables = get_dependency_tables(manifest.iter_mut(), true)?;
+    let mut matched_tables = match scope {
+        DependencyScope::Package => get_dependency_tables(manifest.iter_mut(), true)?,
+        DependencyScope::Workspace => {
+            let workspace = manifest
+                .get_mut("workspace")
+                .and_then(|item| item.as_table_like_mut())
+                .context("workspace")?;
+            get_dependency_tables(workspace.iter_mut(), false)?
+        }
+    };
 
     for dep in dependency_list {
         let mut removed_one = false;
@@ -375,6 +427,7 @@ fn test_remove_dependencies() {
     let stripped_manifest = remove_dependencies(
         &std::fs::read_to_string(manifest).unwrap(),
         &["cc".to_string(), "log-once".to_string(), "rand".to_string()],
+        DependencyScope::Package,
     )
     .unwrap();
     assert_eq!(
@@ -392,6 +445,34 @@ log = "0.4.14"
 [dev-dependencies]
 
 [build-dependencies]
+"#
+    );
+}
+
+#[test]
+fn test_remove_workspace_dependencies() {
+    let manifest =
+        PathBuf::from(TOP_LEVEL).join("./integration-tests/workspace-member-outside/Cargo.toml");
+    let stripped_manifest = remove_dependencies(
+        &std::fs::read_to_string(manifest).unwrap(),
+        &["log".to_string()],
+        DependencyScope::Workspace,
+    )
+    .unwrap();
+    assert_eq!(
+        stripped_manifest,
+        r#"[package]
+name = "workspace-member-outside"
+version = "0.1.0"
+edition = "2021"
+
+[workspace]
+members = ["../just-unused"]
+
+[workspace.dependencies]
+
+[dependencies]
+log = "0.4.14"
 "#
     );
 }

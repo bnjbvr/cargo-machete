@@ -8,7 +8,7 @@ use log::{debug, trace, warn};
 use meta::MetadataFields;
 use rayon::prelude::*;
 use std::{
-    collections::{BTreeMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     error::{self, Error},
     path::{Path, PathBuf},
 };
@@ -53,13 +53,19 @@ pub(crate) struct PackageAnalysis {
     pub package_name: String,
     pub unused: Vec<String>,
     pub ignored_used: Vec<String>,
+
+    /// Canonical path to the `Cargo.toml` holding the `[workspace]` this package takes part in.
+    workspace_root: Option<PathBuf>,
+
+    /// Dependency keys this package pulls in with `{ workspace = true }`.
+    inherited: Vec<String>,
 }
 
 impl PackageAnalysis {
     fn new(
         package_name: String,
         cargo_path: &Path,
-        manifest: cargo_toml::Manifest<meta::PackageMetadata>,
+        full_manifest: FullManifest,
         with_cargo_metadata: bool,
     ) -> anyhow::Result<Self> {
         let metadata = if with_cargo_metadata {
@@ -76,12 +82,20 @@ impl PackageAnalysis {
 
         Ok(Self {
             metadata,
-            manifest,
+            manifest: full_manifest.manifest,
             package_name,
             unused: Vec::default(),
             ignored_used: Vec::default(),
+            workspace_root: full_manifest.workspace_root,
+            inherited: full_manifest.inherited,
         })
     }
+}
+
+/// Unused entries of a `[workspace.dependencies]` table.
+pub(crate) struct WorkspaceAnalysis {
+    pub manifest_path: PathBuf,
+    pub unused: Vec<String>,
 }
 
 fn make_line_regexp(name: &str) -> String {
@@ -260,18 +274,45 @@ impl Search {
     }
 }
 
+struct FullManifest {
+    manifest: cargo_toml::Manifest<PackageMetadata>,
+    workspace_metadata: Option<meta::MetadataFields>,
+    workspace_root: Option<PathBuf>,
+    inherited: Vec<String>,
+}
+
+/// Dependency keys the manifest pulls in with `{ workspace = true }`.
+///
+/// Only readable before [`cargo_toml::Manifest::complete_from_path_and_workspace`], which rewrites
+/// inherited entries into detailed ones and erases the marker.
+fn inherited_deps(manifest: &cargo_toml::Manifest<PackageMetadata>) -> Vec<String> {
+    let per_target = manifest.target.values().flat_map(|target| {
+        target
+            .dependencies
+            .iter()
+            .chain(&target.dev_dependencies)
+            .chain(&target.build_dependencies)
+    });
+
+    manifest
+        .dependencies
+        .iter()
+        .chain(&manifest.dev_dependencies)
+        .chain(&manifest.build_dependencies)
+        .chain(per_target)
+        .filter(
+            |(_, dep)| matches!(dep, cargo_toml::Dependency::Inherited(detail) if detail.workspace),
+        )
+        .map(|(name, _)| name.clone())
+        .collect()
+}
+
 /// Read a manifest and try to find a workspace manifest to complete the data available in the
 /// manifest.
 ///
 /// This will look up the file tree to find the Cargo.toml workspace manifest, assuming it's on a
 /// parent directory.
-fn get_full_manifest(
-    dir_path: &Path,
-    manifest_path: &Path,
-) -> anyhow::Result<(
-    cargo_toml::Manifest<PackageMetadata>,
-    Option<meta::MetadataFields>,
-)> {
+fn get_full_manifest(dir_path: &Path, manifest_path: &Path) -> anyhow::Result<FullManifest> {
     // HACK: we can't plain use `from_path_with_metadata` here, because it calls
     // `complete_from_path` just a bit too early (before we've had a chance to call
     // `inherit_workspace`). See https://gitlab.com/crates.rs/cargo_toml/-/issues/20 for details,
@@ -280,6 +321,8 @@ fn get_full_manifest(
     let mut manifest =
         cargo_toml::Manifest::<PackageMetadata>::from_slice_with_metadata(&cargo_toml_content)?;
 
+    let inherited = inherited_deps(&manifest);
+
     let mut ws_manifest_and_path = None;
 
     // Canonicalize the path, so as to get the full "parenthood" of relative paths.
@@ -287,6 +330,12 @@ fn get_full_manifest(
         warn!("error when canonicalizing dir_path: {err}");
         dir_path.to_owned()
     });
+
+    // A manifest carrying its own `[workspace]` is the root of that workspace, whatever lies above.
+    let own_workspace_root = manifest
+        .workspace
+        .is_some()
+        .then(|| dir_path.join("Cargo.toml"));
 
     // Try to find a workspace manifest, starting from the current directory, going up to the
     // filesystem's root.
@@ -306,12 +355,112 @@ fn get_full_manifest(
         ws_manifest_and_path.as_ref().map(|(m, p)| (m, p.as_path())),
     )?;
 
-    Ok((
+    let workspace_root =
+        own_workspace_root.or_else(|| ws_manifest_and_path.as_ref().map(|(_, p)| p.clone()));
+
+    Ok(FullManifest {
         manifest,
         // Look for `workspace.metadata.cargo-machete` custom metadata in the workspace Cargo.toml.
-        ws_manifest_and_path
+        workspace_metadata: ws_manifest_and_path
             .and_then(|(manifest, _path)| manifest.workspace?.metadata?.cargo_machete),
-    ))
+        workspace_root,
+        inherited,
+    })
+}
+
+/// Report the entries of `manifest_path`'s `[workspace.dependencies]` table that no member of that
+/// workspace inherits.
+///
+/// `seen_members` is how many member manifests the scan actually walked; when it falls short of
+/// what the workspace declares, some inheritors are missing from `inherited` and the whole table
+/// would be reported, so the workspace is skipped instead.
+fn find_unused_workspace_deps(
+    manifest_path: &Path,
+    inherited: &HashSet<&str>,
+    seen_members: usize,
+) -> anyhow::Result<Option<WorkspaceAnalysis>> {
+    let cargo_toml_content = std::fs::read(manifest_path)?;
+    let manifest =
+        cargo_toml::Manifest::<PackageMetadata>::from_slice_with_metadata(&cargo_toml_content)?;
+
+    let is_package = manifest.package.is_some();
+    let Some(workspace) = manifest.workspace else {
+        return Ok(None);
+    };
+
+    if workspace.dependencies.is_empty() {
+        return Ok(None);
+    }
+
+    // A root which is itself a package is a member of its own workspace, without being listed.
+    let declared_members = workspace.members.len() + usize::from(is_package);
+    if seen_members < declared_members {
+        warn!(
+            "skipping the [workspace.dependencies] of {}: only {seen_members} of its {declared_members} members were scanned",
+            manifest_path.display()
+        );
+        return Ok(None);
+    }
+
+    let ignored: HashSet<&str> = workspace
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.cargo_machete.as_ref())
+        .map(|meta| meta.ignored.iter().map(String::as_str).collect())
+        .unwrap_or_default();
+
+    let unused: Vec<String> = workspace
+        .dependencies
+        .keys()
+        .filter(|name| !inherited.contains(name.as_str()) && !ignored.contains(name.as_str()))
+        .cloned()
+        .collect();
+
+    if unused.is_empty() {
+        return Ok(None);
+    }
+
+    Ok(Some(WorkspaceAnalysis {
+        manifest_path: manifest_path.to_owned(),
+        unused,
+    }))
+}
+
+/// Join the analyzed packages back onto the workspaces they inherit from.
+///
+/// `scanned_manifests` maps every walked manifest, canonicalized, to the path it was walked under;
+/// a workspace whose own root wasn't walked is left alone, since the scan then covers an unknown
+/// subset of its members.
+pub(crate) fn find_unused_workspaces<'a>(
+    analyses: impl IntoIterator<Item = &'a PackageAnalysis>,
+    scanned_manifests: &HashMap<PathBuf, PathBuf>,
+) -> anyhow::Result<Vec<WorkspaceAnalysis>> {
+    let mut members: BTreeMap<&Path, (HashSet<&str>, usize)> = BTreeMap::new();
+    for analysis in analyses {
+        let Some(root) = analysis.workspace_root.as_deref() else {
+            continue;
+        };
+        let (inherited, seen) = members.entry(root).or_default();
+        inherited.extend(analysis.inherited.iter().map(String::as_str));
+        *seen += 1;
+    }
+
+    let mut results = Vec::new();
+    for (root, (inherited, seen)) in members {
+        let Some(walked_path) = scanned_manifests.get(root) else {
+            debug!(
+                "{} is a workspace root outside the scanned paths",
+                root.display()
+            );
+            continue;
+        };
+        if let Some(mut analysis) = find_unused_workspace_deps(root, &inherited, seen)? {
+            analysis.manifest_path = walked_path.clone();
+            results.push(analysis);
+        }
+    }
+
+    Ok(results)
 }
 
 pub(crate) fn find_unused(
@@ -323,19 +472,21 @@ pub(crate) fn find_unused(
 
     trace!("trying to open {}...", manifest_path.display());
 
-    let (manifest, workspace_metadata) = get_full_manifest(&dir_path, manifest_path)?;
+    let mut full_manifest = get_full_manifest(&dir_path, manifest_path)?;
 
-    let package_name = match manifest.package {
+    let package_name = match full_manifest.manifest.package {
         Some(ref package) => package.name.clone(),
         None => return Ok(None),
     };
 
     debug!("handling {} ({})", package_name, dir_path.display());
 
+    let workspace_metadata = full_manifest.workspace_metadata.take();
+
     let mut analysis = PackageAnalysis::new(
         package_name,
         manifest_path,
-        manifest,
+        full_manifest,
         matches!(with_cargo_metadata, UseCargoMetadata::Yes),
     )?;
 
@@ -778,6 +929,73 @@ fn check_analysis<F: Fn(PackageAnalysis)>(rel_path: &str, callback: F) {
         .expect("no error during processing");
         callback(analysis);
     }
+}
+
+/// Run the workspace join over exactly `manifest_paths`, as if the scan had walked those and
+/// nothing else.
+#[cfg(test)]
+fn check_workspaces(manifest_paths: &[&str]) -> Vec<WorkspaceAnalysis> {
+    let paths: Vec<PathBuf> = manifest_paths
+        .iter()
+        .map(|rel_path| PathBuf::from(TOP_LEVEL).join(rel_path))
+        .collect();
+
+    let analyses: Vec<PackageAnalysis> = paths
+        .iter()
+        .filter_map(|path| {
+            find_unused(path, UseCargoMetadata::No).expect("find_unused must return an Ok result")
+        })
+        .collect();
+
+    let scanned = paths
+        .iter()
+        .map(|path| {
+            (
+                std::fs::canonicalize(path).expect("fixture manifest must exist"),
+                path.clone(),
+            )
+        })
+        .collect();
+
+    find_unused_workspaces(analyses.iter(), &scanned).expect("no error during processing")
+}
+
+#[test]
+fn test_unused_workspace_dep() {
+    // `rand` is declared in the shared table but inherited by nobody; `serde` is in the same
+    // position but ignored, and `log` is inherited.
+    let workspaces = check_workspaces(&[
+        "./integration-tests/unused-workspace-dep/Cargo.toml",
+        "./integration-tests/unused-workspace-dep/inner/Cargo.toml",
+    ]);
+    assert_eq!(workspaces.len(), 1);
+    assert_eq!(workspaces[0].unused, &["rand".to_string()]);
+}
+
+#[test]
+fn test_workspace_root_outside_scan() {
+    // scanning a member alone says nothing about what its siblings inherit
+    let workspaces =
+        check_workspaces(&["./integration-tests/unused-workspace-dep/inner/Cargo.toml"]);
+    assert!(workspaces.is_empty());
+}
+
+#[test]
+fn test_workspace_member_outside_scan() {
+    // the sole listed member lives outside the scanned paths, so `log` can't be judged
+    let workspaces = check_workspaces(&["./integration-tests/workspace-member-outside/Cargo.toml"]);
+    assert!(workspaces.is_empty());
+}
+
+#[test]
+fn test_ignored_dep_workspace_reports_uninherited() {
+    // `serde` is inherited by the member, `log` isn't and isn't ignored either
+    let workspaces = check_workspaces(&[
+        "./integration-tests/ignored-dep-workspace/Cargo.toml",
+        "./integration-tests/ignored-dep-workspace/inner/Cargo.toml",
+    ]);
+    assert_eq!(workspaces.len(), 1);
+    assert_eq!(workspaces[0].unused, &["log".to_string()]);
 }
 
 #[test]

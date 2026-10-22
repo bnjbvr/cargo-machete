@@ -1,0 +1,13 @@
+[package]
+name = "workspace-member-outside"
+version = "0.1.0"
+edition = "2021"
+
+[workspace]
+members = ["../just-unused"]
+
+[workspace.dependencies]
+log = "0.4.14"
+
+[dependencies]
+log = "0.4.14"

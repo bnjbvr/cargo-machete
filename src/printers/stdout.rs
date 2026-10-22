@@ -9,7 +9,7 @@ use std::{
 
 use crate::{
     printers::{AnalyzedPaths, Printer},
-    search_unused::PackageAnalysis,
+    search_unused::{PackageAnalysis, WorkspaceAnalysis},
 };
 
 pub struct StdoutPrinter {
@@ -51,13 +51,14 @@ impl Printer for StdoutPrinter {
         &self,
         path: &Path,
         results: &'a [(PackageAnalysis, &'a PathBuf)],
+        workspaces: &'a [WorkspaceAnalysis],
     ) -> anyhow::Result<()> {
         let location = match path.to_string_lossy() {
             Cow::Borrowed(".") => Cow::from("this directory"),
             pathstr => pathstr,
         };
 
-        if results.is_empty() {
+        if results.is_empty() && workspaces.is_empty() {
             if !self.quiet {
                 println!(
                     "cargo-machete didn't find any unused dependencies in {location}. Good job!"
@@ -75,6 +76,13 @@ impl Printer for StdoutPrinter {
 
             for dep in &analysis.ignored_used {
                 println!("\t⚠️  {dep} was marked as ignored, but is actually used!");
+            }
+        }
+
+        for analysis in workspaces {
+            println!("workspace -- {}:", analysis.manifest_path.to_string_lossy());
+            for dep in &analysis.unused {
+                println!("\t{dep}");
             }
         }
 

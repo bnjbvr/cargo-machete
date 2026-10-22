@@ -1,5 +1,6 @@
 # unreleased
 
+- Added: report entries of `[workspace.dependencies]` that no member of the workspace inherits (#79).
 - Improved: add `renamed` table to track renamed crates (#152 #153).
 
 # 0.7.0 (released on 2024-09-25)

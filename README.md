@@ -53,6 +53,31 @@ The **return code** gives an indication whether unused dependencies have been fo
 
 This can be used in CI situations.
 
+### Workspace dependencies
+
+`cargo-machete` also reports entries of a `[workspace.dependencies]` table that no member of the
+workspace inherits with `{ workspace = true }`:
+
+```
+cargo-machete found the following unused dependencies in this directory:
+workspace -- ./Cargo.toml:
+	zip
+```
+
+Such an entry is invisible to Cargo — it never enters the dependency graph — so it can outlive the
+last crate that used it without anything noticing.
+
+A dependency that *is* inherited is considered used here, even if the member inheriting it doesn't
+use it in its source; that stays a finding against the member. So after `--fix` removes the last
+inheritor, a second run is needed to report the workspace entry itself.
+
+The report is skipped for a workspace whose members weren't all scanned — running against a single
+member of a larger workspace, or a workspace listing members outside the scanned directories — since
+the missing members are exactly the ones that might inherit. Set `RUST_LOG=warn` to see when this
+happens.
+
+`ignored` in `[workspace.metadata.cargo-machete]` silences these entries too, see below.
+
 ### False positives
 
 To ignore a certain set of dependencies in a crate, add
@@ -120,7 +145,11 @@ $ cargo machete --json ./integration-tests/with-bench/
 
 # When some unused dependencies or ignored-unused dependencies are found:
 $ cargo machete --json ./integration-tests/just-unused/
-$ {"crates":[{"package_name":"just-unused","manifest_path":"./integration-tests/just-unused/Cargo.toml","unused":["log"],"ignored_used":[]}]}
+$ {"crates":[{"package_name":"just-unused","manifest_path":"./integration-tests/just-unused/Cargo.toml","unused":["log"],"ignored_used":[]}],"workspaces":[]}
+
+# Unused `[workspace.dependencies]` entries are reported under `workspaces`:
+$ cargo machete --json ./integration-tests/unused-workspace-dep/
+$ {"crates":[],"workspaces":[{"manifest_path":"./integration-tests/unused-workspace-dep/Cargo.toml","unused":["rand"]}]}
 ```
 
 ## Docker Image
