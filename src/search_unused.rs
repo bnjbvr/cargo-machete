@@ -282,22 +282,32 @@ fn get_full_manifest(
 
     let mut ws_manifest_and_path = None;
 
-    // Canonicalize the path, so as to get the full "parenthood" of relative paths.
-    let mut dir_path = std::fs::canonicalize(dir_path).unwrap_or_else(|err| {
-        warn!("error when canonicalizing dir_path: {err}");
-        dir_path.to_owned()
-    });
+    if manifest.workspace.is_some() {
+        // The manifest is its own workspace root, so Cargo doesn't look any further up: neither
+        // should we.
+        let workspace_manifest =
+            cargo_toml::Manifest::<PackageMetadata>::from_slice_with_metadata(&cargo_toml_content)?;
+        ws_manifest_and_path = Some((workspace_manifest, manifest_path.to_owned()));
+    } else {
+        // Canonicalize the path, so as to get the full "parenthood" of relative paths.
+        let mut dir_path = std::fs::canonicalize(dir_path).unwrap_or_else(|err| {
+            warn!("error when canonicalizing dir_path: {err}");
+            dir_path.to_owned()
+        });
 
-    // Try to find a workspace manifest, starting from the current directory, going up to the
-    // filesystem's root.
-    while dir_path.pop() {
-        let workspace_cargo_path = dir_path.join("Cargo.toml");
-        if let Ok(workspace_manifest) =
-            cargo_toml::Manifest::<PackageMetadata>::from_path_with_metadata(&workspace_cargo_path)
-            && workspace_manifest.workspace.is_some()
-        {
-            ws_manifest_and_path = Some((workspace_manifest, workspace_cargo_path));
-            break;
+        // Try to find a workspace manifest, starting from the parent directory, going up to the
+        // filesystem's root.
+        while dir_path.pop() {
+            let workspace_cargo_path = dir_path.join("Cargo.toml");
+            if let Ok(workspace_manifest) =
+                cargo_toml::Manifest::<PackageMetadata>::from_path_with_metadata(
+                    &workspace_cargo_path,
+                )
+                && workspace_manifest.workspace.is_some()
+            {
+                ws_manifest_and_path = Some((workspace_manifest, workspace_cargo_path));
+                break;
+            }
         }
     }
 
@@ -987,6 +997,18 @@ fn test_workspace_from_relative_path() {
 
     assert_eq!(analysis.unused, &["log".to_string()]);
     assert!(analysis.ignored_used.is_empty());
+}
+
+#[test]
+fn test_nested_workspace_root() {
+    // A package manifest that is itself a workspace root must inherit from its own `[workspace]`
+    // table, and not from a workspace found in a parent directory.
+    check_analysis(
+        "./integration-tests/nested-workspace-root/inner/Cargo.toml",
+        |analysis| {
+            assert_eq!(analysis.unused, &["log".to_string()]);
+        },
+    );
 }
 
 #[test]
