@@ -25,13 +25,13 @@ mod meta {
 
     use serde::{Deserialize, Serialize};
 
-    #[derive(Serialize, Deserialize)]
+    #[derive(Clone, Serialize, Deserialize)]
     pub struct PackageMetadata {
         #[serde(rename = "cargo-machete")]
         pub cargo_machete: Option<MetadataFields>,
     }
 
-    #[derive(Serialize, Deserialize)]
+    #[derive(Clone, Serialize, Deserialize)]
     pub struct MetadataFields {
         /// Crates triggering false positives in `cargo-machete`, which should not be reported as
         /// unused.
@@ -263,8 +263,8 @@ impl Search {
 /// Read a manifest and try to find a workspace manifest to complete the data available in the
 /// manifest.
 ///
-/// This will look up the file tree to find the Cargo.toml workspace manifest, assuming it's on a
-/// parent directory.
+/// If the current package isn't a workspace root, this will look up the file tree to find the
+/// Cargo.toml workspace manifest, assuming it's on a parent directory.
 fn get_full_manifest(
     dir_path: &Path,
     manifest_path: &Path,
@@ -285,8 +285,7 @@ fn get_full_manifest(
     if manifest.workspace.is_some() {
         // The manifest is its own workspace root, so Cargo doesn't look any further up: neither
         // should we.
-        let workspace_manifest =
-            cargo_toml::Manifest::<PackageMetadata>::from_slice_with_metadata(&cargo_toml_content)?;
+        let workspace_manifest = manifest.clone();
         ws_manifest_and_path = Some((workspace_manifest, manifest_path.to_owned()));
     } else {
         // Canonicalize the path, so as to get the full "parenthood" of relative paths.

@@ -1,5 +1,6 @@
 # unreleased
 
+- Fixed: if a package is a workspace root, use it as the workspace root, instead of trying to find a workspace manifest in a parent directory (#280).
 - Added: `--skip` flag to prune directories from the walk, matched on trailing path components (e.g. `--skip tests`), or as an exact directory when absolute or containing `..` (e.g. `--skip ../tests`); may be passed multiple times (#94).
 - Improved: add `renamed` table to track renamed crates (#152 #153).
 
