@@ -68,9 +68,21 @@ cargo machete --skip tests
 cargo machete --skip tests --skip examples
 ```
 
-`--skip` matches on trailing path components, the same way `--skip-target-dir` matches `target/`, so
-`--skip crates/foo` skips any directory whose path ends with `crates/foo`. A leading `./` is
-ignored, so `--skip ./tests` and `--skip tests` behave identically.
+How a `--skip` path is matched depends on its form:
+
+- A plain relative path matches on trailing path components, the same way `--skip-target-dir`
+  matches `target/`: `--skip crates/foo` skips any directory whose path ends with `crates/foo`. A
+  leading `./` is ignored, so `--skip ./tests` and `--skip tests` behave identically.
+- An absolute path, or a relative path containing `..`, is resolved against the current directory
+  and skips exactly that directory. It's an error if it doesn't exist.
+
+```bash
+# from `my-repo/tools`, analyze the whole repository except `my-repo/tests`
+cargo machete --skip ../tests ..
+```
+
+Note that options must come before the paths to analyze: anything after the first path is treated
+as another path.
 
 ### False positives
 
