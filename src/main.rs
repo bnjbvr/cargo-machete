@@ -268,7 +268,7 @@ fn run_machete() -> anyhow::Result<bool> {
 
     // Be resilient in case we can't collect some paths due to errors: don't abort execution, so we
     // can run analysis for paths which didn't cause errors.
-    let mut path_collection_errors = Vec::new();
+    let mut path_collection_errors: Vec<anyhow::Error> = Vec::new();
 
     for path in args.paths {
         let manifest_path_entries = match collect_paths(
@@ -282,10 +282,16 @@ fn run_machete() -> anyhow::Result<bool> {
         ) {
             Ok(entries) => entries,
             Err(err) => {
-                path_collection_errors.push(err);
+                path_collection_errors.push(err.into());
                 continue;
             }
         };
+
+        if manifest_path_entries.is_empty() {
+            path_collection_errors
+                .push(anyhow::anyhow!("found no Cargo.toml in {}", path.display()));
+            continue;
+        }
 
         let with_metadata = if args.with_metadata {
             UseCargoMetadata::Yes
