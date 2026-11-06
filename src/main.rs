@@ -105,7 +105,7 @@ struct CollectPathOptions {
     override_respect_git_ignore: Option<bool>,
 }
 
-fn collect_paths(path: &Path, options: CollectPathOptions) -> Result<Vec<PathBuf>, ignore::Error> {
+fn collect_paths(path: &Path, options: CollectPathOptions) -> anyhow::Result<Vec<PathBuf>> {
     // Find directory entries.
     let mut builder = ignore::WalkBuilder::new(path);
 
@@ -156,7 +156,7 @@ fn collect_paths(path: &Path, options: CollectPathOptions) -> Result<Vec<PathBuf
 
     // Keep only errors and `Cargo.toml` files (filter), then map correct paths into owned
     // `PathBuf`.
-    walker
+    let entries = walker
         .into_iter()
         .filter(|entry| {
             entry
@@ -164,7 +164,13 @@ fn collect_paths(path: &Path, options: CollectPathOptions) -> Result<Vec<PathBuf
                 .map_or(true, |entry| entry.file_name() == "Cargo.toml")
         })
         .map(|res_entry| res_entry.map(|e| e.into_path()))
-        .collect()
+        .collect::<Result<Vec<_>, _>>()?;
+
+    if entries.is_empty() {
+        bail!("found no Cargo.toml in {}", path.display());
+    }
+
+    Ok(entries)
 }
 
 /// A directory to prune from the walk, as given with `--skip`.
@@ -282,16 +288,10 @@ fn run_machete() -> anyhow::Result<bool> {
         ) {
             Ok(entries) => entries,
             Err(err) => {
-                path_collection_errors.push(err.into());
+                path_collection_errors.push(err);
                 continue;
             }
         };
-
-        if manifest_path_entries.is_empty() {
-            path_collection_errors
-                .push(anyhow::anyhow!("found no Cargo.toml in {}", path.display()));
-            continue;
-        }
 
         let with_metadata = if args.with_metadata {
             UseCargoMetadata::Yes
@@ -448,7 +448,7 @@ fn test_ignore_target() {
             override_respect_git_ignore: Some(false),
         },
     );
-    assert!(entries.unwrap().is_empty());
+    assert!(entries.is_err());
 
     let entries = collect_paths(
         &PathBuf::from(TOP_LEVEL).join("./integration-tests/with-target/"),
@@ -459,7 +459,7 @@ fn test_ignore_target() {
             override_respect_git_ignore: Some(false),
         },
     );
-    assert!(entries.unwrap().is_empty());
+    assert!(entries.is_err());
 
     let entries = collect_paths(
         &PathBuf::from(TOP_LEVEL).join("./integration-tests/with-target/"),
@@ -471,6 +471,21 @@ fn test_ignore_target() {
         },
     );
     assert!(!entries.unwrap().is_empty());
+}
+
+#[test]
+fn test_no_cargo_toml_error() {
+    let entries = collect_paths(
+        &PathBuf::from(TOP_LEVEL).join("./integration-tests/empty-dir/"),
+        CollectPathOptions {
+            skip_target_dir: false,
+            skip_paths: Vec::new(),
+            respect_ignore_files: false,
+            override_respect_git_ignore: Some(false),
+        },
+    );
+    let err = entries.unwrap_err();
+    assert!(err.to_string().contains("found no Cargo.toml"));
 }
 
 #[test]
