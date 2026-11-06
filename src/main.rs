@@ -274,7 +274,7 @@ fn run_machete() -> anyhow::Result<bool> {
 
     // Be resilient in case we can't collect some paths due to errors: don't abort execution, so we
     // can run analysis for paths which didn't cause errors.
-    let mut path_collection_errors: Vec<anyhow::Error> = Vec::new();
+    let mut path_collection_errors = Vec::new();
 
     for path in args.paths {
         let manifest_path_entries = match collect_paths(
