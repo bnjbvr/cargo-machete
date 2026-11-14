@@ -32,9 +32,9 @@ jobs:
 
       - run: cargo fmt --all --check
 
-      - run: cargo clippy --all --all-features -- -D warnings
+      - run: cargo clippy --locked --all --all-features -- -D warnings
 
-      - run: cargo test --workspace --verbose
+      - run: cargo test --locked --workspace --verbose
 
   # Code from here: https://docs.github.com/en/actions/publishing-packages/publishing-docker-images
   # TODO: Add a step to publish the image to the Docker Hub
