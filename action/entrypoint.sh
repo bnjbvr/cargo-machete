@@ -12,8 +12,8 @@ fi
 # Determine the Rust target triple using rustc.
 echo "Determining Rust target triple..."
 TRIPLE=$(rustc -vV | grep host | awk '{print $2}')
-if [[ "$TRIPLE" == *"unknown-linux"* && "$TRIPLE" == *"x86_64"* ]]; then
-  # Replace 'gnu' with 'musl' only for linux x86_64.
+if [[ "$TRIPLE" == *"unknown-linux"* ]]; then
+  # Replace 'gnu' with 'musl' for linux.
   TRIPLE="${TRIPLE/gnu/musl}"
 fi
 echo "Found TRIPLE=${TRIPLE}."
