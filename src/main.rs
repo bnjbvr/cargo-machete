@@ -7,6 +7,7 @@ use crate::printers::{AnalyzedPaths, Printer};
 use crate::search_unused::find_unused;
 use anyhow::{Context, bail};
 use rayon::prelude::*;
+use std::env::current_dir;
 use std::path::{Component, Path};
 use std::str::FromStr;
 use std::{fs, path::PathBuf};
@@ -49,15 +50,29 @@ struct MacheteArgs {
     #[argh(switch)]
     with_metadata: bool,
 
-    /// don't analyze anything contained in any target/ directories encountered.
+    /// don't analyze anything contained in *any* target/ directories encountered.
+    ///
+    /// Equivalent to `--skip-patterns target`.
     #[argh(switch)]
     skip_target_dir: bool,
 
-    /// don't analyze anything under directories matching this path. Relative paths match on
-    /// trailing path components, like --skip-target-dir does for target/, so `--skip tests` skips
-    /// every `tests` directory found. Absolute paths and paths containing `..` are resolved
-    /// against the current directory and skip exactly that directory. May be passed multiple
-    /// times.
+    /// don't analyze anything under directories which paths *end* with the passed path component. For
+    /// instance, passing "target" will ignore any found paths called "target", but not a path
+    /// called e.g. "suffix-target".
+    ///
+    /// Absolute or relative paths are ignored here; use `--skip` for these instead instead.
+    ///
+    /// May be passed multiple times.
+    #[argh(option)]
+    skip_patterns: Vec<PathBuf>,
+
+    /// don't analyze anything under the directories specified by this path.
+    ///
+    /// As opposed to `--skip-patterns`, this skips the exact directories specified with this flag.
+    ///
+    /// Relative paths are resolved against the current directory. A path without a prefix will be considered relative to the working directory, as if starting with `./`.
+    ///
+    /// May be passed multiple times.
     #[argh(option)]
     skip: Vec<PathBuf>,
 
@@ -88,11 +103,11 @@ struct MacheteArgs {
 }
 
 struct CollectPathOptions {
-    /// Should we avoid scanning `target` directories?
-    skip_target_dir: bool,
+    /// Patterns to skip in directories.
+    skip_patterns: Vec<PathBuf>,
 
-    /// Directories to skip, see [`SkipPath`].
-    skip_paths: Vec<SkipPath>,
+    /// Absolute or relative directories to skip.
+    exact_skip_paths: Vec<PathBuf>,
 
     /// Should we ignore files as specified in .gitignore (in the target directory, or any parent),
     /// and `.ignore`?
@@ -115,16 +130,13 @@ fn collect_paths(path: &Path, options: CollectPathOptions) -> anyhow::Result<Vec
         builder.git_ignore(val);
     }
 
-    let skip_paths = options.skip_paths;
-    let skip_target_dir = options.skip_target_dir;
+    let exact_skip_paths = options.exact_skip_paths;
+    let skip_patterns = options.skip_patterns;
 
-    // Anchored skip paths are absolute and canonical, so entries must be compared through the
-    // canonical form of the walk root. Entries are always `path.join(relative)`, so we only
-    // canonicalize the root once instead of every entry.
-    let canonical_root = if skip_paths
-        .iter()
-        .any(|skip| matches!(skip, SkipPath::Anchored(_)))
-    {
+    // Exact skip paths are matched exactly, so entries must be compared through the canonical form
+    // of the walk root. Entries are always `path.join(relative)`, so we only canonicalize the root
+    // once instead of every entry.
+    let canonical_root = if !exact_skip_paths.is_empty() {
         Some(
             fs::canonicalize(path).map_err(|err| ignore::Error::WithPath {
                 path: path.to_path_buf(),
@@ -135,20 +147,41 @@ fn collect_paths(path: &Path, options: CollectPathOptions) -> anyhow::Result<Vec
         None
     };
 
-    if skip_target_dir || !skip_paths.is_empty() {
-        let root = path.to_path_buf();
+    // If the walk root is a skipped directory, or lies anywhere under one, everything it contains
+    // is skipped. `Path::starts_with` compares whole components, so skipping `foo` doesn't affect
+    // a root at `foobar`.
+    if let Some(canonical_root) = &canonical_root
+        && exact_skip_paths
+            .iter()
+            .any(|skip| canonical_root.starts_with(skip))
+    {
+        bail!("found no Cargo.toml in {}", path.display());
+    }
+
+    if !skip_patterns.is_empty() || !exact_skip_paths.is_empty() {
+        // Entries are built from the walk root as given (possibly non-canonical, e.g. `src/..`),
+        // so the relative part must be stripped with it, not with the canonical root.
+        let walk_root = path.to_path_buf();
         builder.filter_entry(move |entry| {
             let entry_path = entry.path();
-            if skip_target_dir && entry_path.ends_with("target") {
-                return false;
+
+            for last_component in &skip_patterns {
+                if entry_path.ends_with(last_component) {
+                    return false;
+                }
             }
-            !skip_paths.iter().any(|skip| match skip {
-                SkipPath::Suffix(suffix) => entry_path.ends_with(suffix),
-                SkipPath::Anchored(abs) => canonical_root.as_ref().is_some_and(|canonical_root| {
-                    let rel = entry_path.strip_prefix(&root).unwrap_or(entry_path);
-                    canonical_root.join(rel) == *abs
-                }),
-            })
+
+            if let Some(canonical_root) = &canonical_root {
+                let rel = entry_path.strip_prefix(&walk_root).unwrap_or(entry_path);
+                let canonical_entry = canonical_root.join(rel);
+                // The root itself isn't under any skipped path (checked above), so prune the exact
+                // matching child directories.
+                if exact_skip_paths.contains(&canonical_entry) {
+                    return false;
+                }
+            }
+
+            true
         });
     }
 
@@ -171,47 +204,6 @@ fn collect_paths(path: &Path, options: CollectPathOptions) -> anyhow::Result<Vec
     }
 
     Ok(entries)
-}
-
-/// A directory to prune from the walk, as given with `--skip`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum SkipPath {
-    /// A plain relative path like `tests` or `crates/foo`: skips every directory whose path ends
-    /// with these components, wherever it appears under the analyzed paths.
-    Suffix(PathBuf),
-    /// An absolute path, or a relative one containing `..`: resolved against the current
-    /// directory, and skips exactly that directory.
-    Anchored(PathBuf),
-}
-
-impl SkipPath {
-    /// Interprets a user-provided `--skip` value, resolving anchored paths against `base`.
-    ///
-    /// Returns `Ok(None)` for paths that would match everything (e.g. `.`), and an error if an
-    /// anchored path doesn't exist.
-    fn resolve(raw: &Path, base: &Path) -> anyhow::Result<Option<Self>> {
-        let anchored =
-            raw.is_absolute() || raw.components().any(|c| matches!(c, Component::ParentDir));
-
-        if anchored {
-            // Note: if raw is absolute, `base.join(raw)` is equivalent to `raw`, so this works for
-            // both absolute and relative paths containing `..`.
-            let abs = fs::canonicalize(base.join(raw))
-                .with_context(|| format!("invalid --skip path {}", raw.display()))?;
-            return Ok(Some(SkipPath::Anchored(abs)));
-        }
-
-        // Drop `.` components so `--skip ./tests` behaves like `--skip tests`, and `--skip .`
-        // doesn't end up matching every entry.
-        let suffix: PathBuf = raw
-            .components()
-            .filter(|c| !matches!(c, Component::CurDir))
-            .collect();
-        if suffix.as_os_str().is_empty() {
-            return Ok(None);
-        }
-        Ok(Some(SkipPath::Suffix(suffix)))
-    }
 }
 
 /// Return true if this is run as `cargo machete`, false otherwise (`cargo-machete`, `cargo run -- ...`)
@@ -261,13 +253,35 @@ fn run_machete() -> anyhow::Result<bool> {
         args.paths.push(PathBuf::from("."));
     }
 
-    let skip_paths = {
-        let cwd = std::env::current_dir().context("couldn't read the current directory")?;
-        let mut skip_paths = Vec::with_capacity(args.skip.len());
-        for raw in &args.skip {
-            skip_paths.extend(SkipPath::resolve(raw, &cwd)?);
+    // Handle skip patterns.
+    for path in &args.skip_patterns {
+        if path.is_absolute()
+            || path
+                .components()
+                .any(|c| matches!(c, Component::CurDir | Component::ParentDir))
+        {
+            bail!(
+                "passing an absolute or relative directory is not allowed with `--skip-patterns`, use `--skip` instead"
+            );
         }
-        skip_paths
+    }
+
+    if args.skip_target_dir && !args.skip_patterns.iter().any(|p| p.as_os_str() == "target") {
+        args.skip_patterns.push(PathBuf::from("target"));
+    }
+
+    // Handle exact skip paths.
+    let skip_exact_paths = {
+        let cwd = current_dir().context("couldn't read the current directory")?;
+
+        let mut paths = Vec::with_capacity(args.skip.len());
+        for raw in &args.skip {
+            let abs_path = fs::canonicalize(cwd.join(raw))
+                .with_context(|| format!("invalid --skip path {}", raw.display()))?;
+            paths.push(abs_path);
+        }
+
+        paths
     };
 
     let mut has_unused_dependencies = false;
@@ -280,8 +294,8 @@ fn run_machete() -> anyhow::Result<bool> {
         let manifest_path_entries = match collect_paths(
             &path,
             CollectPathOptions {
-                skip_target_dir: args.skip_target_dir,
-                skip_paths: skip_paths.clone(),
+                exact_skip_paths: skip_exact_paths.clone(),
+                skip_patterns: args.skip_patterns.clone(),
                 respect_ignore_files: !args.no_ignore,
                 override_respect_git_ignore: None,
             },
@@ -437,13 +451,18 @@ fn main() {
 #[cfg(test)]
 const TOP_LEVEL: &str = concat!(env!("CARGO_MANIFEST_DIR"));
 
+#[cfg(test)]
+fn skip_target() -> Vec<PathBuf> {
+    vec![PathBuf::from("target")]
+}
+
 #[test]
 fn test_ignore_target() {
     let entries = collect_paths(
         &PathBuf::from(TOP_LEVEL).join("./integration-tests/with-target/"),
         CollectPathOptions {
-            skip_target_dir: true,
-            skip_paths: Vec::new(),
+            skip_patterns: skip_target(),
+            exact_skip_paths: Vec::new(),
             respect_ignore_files: false,
             override_respect_git_ignore: Some(false),
         },
@@ -453,8 +472,8 @@ fn test_ignore_target() {
     let entries = collect_paths(
         &PathBuf::from(TOP_LEVEL).join("./integration-tests/with-target/"),
         CollectPathOptions {
-            skip_target_dir: false,
-            skip_paths: Vec::new(),
+            skip_patterns: Vec::new(),
+            exact_skip_paths: Vec::new(),
             respect_ignore_files: true,
             override_respect_git_ignore: Some(false),
         },
@@ -464,8 +483,8 @@ fn test_ignore_target() {
     let entries = collect_paths(
         &PathBuf::from(TOP_LEVEL).join("./integration-tests/with-target/"),
         CollectPathOptions {
-            skip_target_dir: false,
-            skip_paths: Vec::new(),
+            skip_patterns: Vec::new(),
+            exact_skip_paths: Vec::new(),
             respect_ignore_files: false,
             override_respect_git_ignore: Some(false),
         },
@@ -478,8 +497,8 @@ fn test_no_cargo_toml_error() {
     let entries = collect_paths(
         &PathBuf::from(TOP_LEVEL).join("./integration-tests/empty-dir/"),
         CollectPathOptions {
-            skip_target_dir: false,
-            skip_paths: Vec::new(),
+            skip_patterns: Vec::new(),
+            exact_skip_paths: Vec::new(),
             respect_ignore_files: false,
             override_respect_git_ignore: Some(false),
         },
@@ -489,20 +508,105 @@ fn test_no_cargo_toml_error() {
 }
 
 #[test]
-fn test_skip_paths() {
+fn test_skip_exact_paths() {
     let fixture = PathBuf::from(TOP_LEVEL).join("integration-tests/skip-sub-dir");
 
-    // Collects manifests under `root`, with `--skip` values resolved as if run from `cwd`.
-    let collect = |root: &Path, cwd: &Path, skips: &[&str]| -> Vec<PathBuf> {
-        let skip_paths = skips
+    // Collects manifests under `root`, with `--skip` value.
+    let collect = |root: &Path, cwd: &Path, skip_paths_str: &[&str]| {
+        let skip_paths = skip_paths_str
             .iter()
-            .filter_map(|raw| SkipPath::resolve(Path::new(raw), cwd).unwrap())
+            .map(|path| fs::canonicalize(cwd.join(path)).unwrap())
             .collect();
         collect_paths(
             root,
             CollectPathOptions {
-                skip_target_dir: false,
-                skip_paths,
+                skip_patterns: Vec::new(),
+                exact_skip_paths: skip_paths,
+                respect_ignore_files: false,
+                override_respect_git_ignore: Some(false),
+            },
+        )
+    };
+    let has_skipped =
+        |entries: &[PathBuf]| entries.iter().any(|p| p.ends_with("skipped/Cargo.toml"));
+
+    // Without any skip patterns, both the top-level and the nested `skipped` manifest are collected.
+    {
+        let entries = collect(&fixture, &fixture, &[]).unwrap();
+        assert_eq!(entries.len(), 2);
+        assert!(has_skipped(&entries));
+    }
+
+    // Exact paths are correctly matched.
+    {
+        let entries = collect(&fixture, &fixture, &["./skipped"]).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert!(!has_skipped(&entries));
+    }
+
+    // `--skip .` skips the current directory, including children, so this leads to no collected
+    // Cargo.toml, hence an error.
+    {
+        let error = collect(&fixture, &fixture, &["."]).unwrap_err();
+        assert!(error.to_string().contains("found no Cargo.toml"));
+    }
+
+    // `--skip .` matches all directories when run from a source sub-dir; `.` is resolved to the
+    // current working directory.
+    {
+        let cwd = fixture.join("src");
+        let entries = collect(&fixture, &cwd, &["."]).unwrap();
+        assert_eq!(entries.len(), 2);
+        assert!(has_skipped(&entries));
+    }
+
+    // `--skip .` matches some directories when run from an actual Rust package; `.` is resolved to
+    // the current working directory.
+    {
+        let cwd = fixture.join("skipped");
+        let entries = collect(&fixture, &cwd, &["."]).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert!(!has_skipped(&entries));
+    }
+
+    // Skipped paths are resolved against the current working directory, not the root.
+    // This is running from `skip-sub-dir/src`, `cargo machete --skip ../skipped ..`.
+    {
+        let cwd = fixture.join("src");
+        let entries = collect(&cwd.join(".."), &cwd, &["../skipped"]).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert!(!has_skipped(&entries));
+    }
+
+    // Walking a directory that lies under a skipped one skips it entirely.
+    // This is running from `skip-sub-dir/skipped`, `cargo machete --skip .. .`.
+    {
+        let cwd = fixture.join("skipped");
+        let error = collect(&cwd, &cwd, &[".."]).unwrap_err();
+        assert!(error.to_string().contains("found no Cargo.toml"));
+    }
+
+    // Same, with a walk root nested deeper than the skipped directory, and given in a
+    // non-canonical form: running from `skip-sub-dir`, `cargo machete --skip . skipped/src/..`.
+    {
+        let root = fixture.join("skipped/src/..");
+        let error = collect(&root, &fixture, &["."]).unwrap_err();
+        assert!(error.to_string().contains("found no Cargo.toml"));
+    }
+}
+
+#[test]
+fn test_skip_patterns() {
+    let fixture = PathBuf::from(TOP_LEVEL).join("integration-tests/skip-sub-dir");
+
+    // Collects manifests under `root`, with `--skip-patterns` value.
+    let collect = |root: &Path, skip_patterns_str: &[&str]| -> Vec<PathBuf> {
+        let skip_patterns = skip_patterns_str.iter().map(PathBuf::from).collect();
+        collect_paths(
+            root,
+            CollectPathOptions {
+                skip_patterns,
+                exact_skip_paths: Vec::new(),
                 respect_ignore_files: false,
                 override_respect_git_ignore: Some(false),
             },
@@ -512,54 +616,19 @@ fn test_skip_paths() {
     let has_skipped =
         |entries: &[PathBuf]| entries.iter().any(|p| p.ends_with("skipped/Cargo.toml"));
 
-    // Without any skip paths, both the top-level and the nested `skipped` manifest are collected.
+    // Without any skip patterns, both the top-level and the nested `skipped` manifest are collected.
     {
-        let entries = collect(&fixture, &fixture, &[]);
+        let entries = collect(&fixture, &[]);
         assert_eq!(entries.len(), 2);
         assert!(has_skipped(&entries));
     }
 
-    // Plain relative paths match on trailing components; `./` and `.` components are ignored.
-    for skip in ["skipped", "./skipped", "skipped/", "skip-sub-dir/skipped"] {
-        let entries = collect(&fixture, &fixture, &[skip]);
-        assert_eq!(entries.len(), 1, "--skip {skip}");
-        assert!(!has_skipped(&entries), "--skip {skip}");
+    // Plain relative paths match on trailing components.
+    for skip in ["skipped", "skipped/", "skip-sub-dir/skipped"] {
+        let entries = collect(&fixture, &[skip]);
+        assert_eq!(entries.len(), 1, "--skip-patterns {skip}");
+        assert!(!has_skipped(&entries), "--skip-patterns {skip}");
     }
-
-    // `--skip .` doesn't match everything.
-    {
-        let entries = collect(&fixture, &fixture, &["."]);
-        assert_eq!(entries.len(), 2);
-        assert!(has_skipped(&entries));
-    }
-
-    // Absolute paths skip exactly that directory.
-    {
-        let abs = fixture.join("skipped");
-        let entries = collect(&fixture, &fixture, &[abs.to_str().unwrap()]);
-        assert_eq!(entries, vec![fixture.join("Cargo.toml")]);
-    }
-
-    // Paths with `..` are resolved against the current directory, also when the walk root is
-    // itself relative: from `skip-sub-dir/src`, `cargo machete --skip ../skipped ..`.
-    {
-        let cwd = fixture.join("src");
-        let entries = collect(&cwd.join(".."), &cwd, &["../skipped"]);
-        assert_eq!(entries.len(), 1);
-        assert!(!has_skipped(&entries));
-    }
-
-    // `..` paths are resolved to one exact directory instead of being matched as a suffix, so
-    // scanning `../..` with `--skip ../tests` can't prune an unrelated `../../tests`.
-    assert_eq!(
-        SkipPath::resolve(Path::new("../skipped"), &fixture.join("src")).unwrap(),
-        Some(SkipPath::Anchored(
-            fs::canonicalize(fixture.join("skipped")).unwrap()
-        ))
-    );
-
-    // Anchored paths that don't exist are reported instead of being silently ignored.
-    assert!(SkipPath::resolve(Path::new("../does-not-exist"), &fixture).is_err());
 }
 
 #[test]

@@ -1,8 +1,9 @@
 # unreleased
 
+- Added `--skip` to skip a precise directory, defined as an absolute or relative path, no prefix meaning `.`-relative (e.g. `--skip ../tests`); may be passed multiple times (#287).
 - Fixed: error out when a searched path contains no Cargo.toml, instead of reporting success (#143).
 - Fixed: if a package is a workspace root, use it as the workspace root, instead of trying to find a workspace manifest in a parent directory (#280).
-- Added: `--skip` flag to prune directories from the walk, matched on trailing path components (e.g. `--skip tests`), or as an exact directory when absolute or containing `..` (e.g. `--skip ../tests`); may be passed multiple times (#94).
+- Added: `--skip-patterns` flag to prune directories from the walk, matched on trailing path components (e.g. `--skip-patterns tests`); may be passed multiple times (#94).
 - Improved: add `renamed` table to track renamed crates (#152 #153).
 
 # 0.7.0 (released on 2024-09-25)
