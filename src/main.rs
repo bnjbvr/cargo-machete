@@ -255,6 +255,11 @@ fn run_machete() -> anyhow::Result<bool> {
 
     // Handle skip patterns.
     for path in &args.skip_patterns {
+        if path.is_empty() {
+            // This would lead to skipping everything, so let's make it a hard error instead.
+            bail!("empty skip pattern");
+        }
+
         if path.is_absolute()
             || path
                 .components()
