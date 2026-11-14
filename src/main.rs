@@ -102,6 +102,48 @@ struct MacheteArgs {
     paths: Vec<PathBuf>,
 }
 
+struct ResolveSkipPaths<'a> {
+    skip_target_dir: bool,
+    skip_patterns: &'a mut Vec<PathBuf>,
+    skip: &'a mut Vec<PathBuf>,
+}
+
+fn resolve_skip_paths(cwd: &Path, args: ResolveSkipPaths<'_>) -> anyhow::Result<()> {
+    // Handle skip patterns.
+    for path in &*args.skip_patterns {
+        if path.is_empty() {
+            // This would lead to skipping everything, so let's make it a hard error instead.
+            bail!("empty skip pattern");
+        }
+
+        if path.is_absolute()
+            || path
+                .components()
+                .any(|c| matches!(c, Component::CurDir | Component::ParentDir))
+        {
+            bail!(
+                "passing an absolute or relative directory is not allowed with `--skip-patterns`, use `--skip` instead"
+            );
+        }
+    }
+
+    // Add a skip pattern if we're skipping the target dir.
+    if args.skip_target_dir && !args.skip_patterns.iter().any(|p| p.as_os_str() == "target") {
+        args.skip_patterns.push(PathBuf::from("target"));
+    }
+
+    // Canonicalize exact skip paths.
+    {
+        for raw in args.skip {
+            let abs_path = fs::canonicalize(cwd.join(&raw))
+                .with_context(|| format!("invalid --skip path {}", raw.display()))?;
+            *raw = abs_path;
+        }
+    }
+
+    Ok(())
+}
+
 struct CollectPathOptions {
     /// Patterns to skip in directories.
     skip_patterns: Vec<PathBuf>,
@@ -116,7 +158,7 @@ struct CollectPathOptions {
     // As an override to the above `respect_ignore_files`, should we use `.gitignore` overall?
     //
     // This is used only in testing, to avoid reading this repository's `.gitignore` file for
-    // testing the `collect_path()` function.
+    // testing the `collect_paths()` function.
     override_respect_git_ignore: Option<bool>,
 }
 
@@ -253,41 +295,14 @@ fn run_machete() -> anyhow::Result<bool> {
         args.paths.push(PathBuf::from("."));
     }
 
-    // Handle skip patterns.
-    for path in &args.skip_patterns {
-        if path.is_empty() {
-            // This would lead to skipping everything, so let's make it a hard error instead.
-            bail!("empty skip pattern");
-        }
-
-        if path.is_absolute()
-            || path
-                .components()
-                .any(|c| matches!(c, Component::CurDir | Component::ParentDir))
-        {
-            bail!(
-                "passing an absolute or relative directory is not allowed with `--skip-patterns`, use `--skip` instead"
-            );
-        }
-    }
-
-    if args.skip_target_dir && !args.skip_patterns.iter().any(|p| p.as_os_str() == "target") {
-        args.skip_patterns.push(PathBuf::from("target"));
-    }
-
-    // Handle exact skip paths.
-    let skip_exact_paths = {
-        let cwd = current_dir().context("couldn't read the current directory")?;
-
-        let mut paths = Vec::with_capacity(args.skip.len());
-        for raw in &args.skip {
-            let abs_path = fs::canonicalize(cwd.join(raw))
-                .with_context(|| format!("invalid --skip path {}", raw.display()))?;
-            paths.push(abs_path);
-        }
-
-        paths
-    };
+    resolve_skip_paths(
+        &current_dir().context("couldn't read the current directory")?,
+        ResolveSkipPaths {
+            skip_target_dir: args.skip_target_dir,
+            skip_patterns: &mut args.skip_patterns,
+            skip: &mut args.skip,
+        },
+    )?;
 
     let mut has_unused_dependencies = false;
 
@@ -299,7 +314,7 @@ fn run_machete() -> anyhow::Result<bool> {
         let manifest_path_entries = match collect_paths(
             &path,
             CollectPathOptions {
-                exact_skip_paths: skip_exact_paths.clone(),
+                exact_skip_paths: args.skip.clone(),
                 skip_patterns: args.skip_patterns.clone(),
                 respect_ignore_files: !args.no_ignore,
                 override_respect_git_ignore: None,
@@ -456,18 +471,25 @@ fn main() {
 #[cfg(test)]
 const TOP_LEVEL: &str = concat!(env!("CARGO_MANIFEST_DIR"));
 
-#[cfg(test)]
-fn skip_target() -> Vec<PathBuf> {
-    vec![PathBuf::from("target")]
-}
-
 #[test]
 fn test_ignore_target() {
+    let mut skip_patterns = Vec::new();
+    let mut exact_skip_paths = Vec::new();
+    resolve_skip_paths(
+        &PathBuf::from("."),
+        ResolveSkipPaths {
+            skip_target_dir: true,
+            skip_patterns: &mut skip_patterns,
+            skip: &mut exact_skip_paths,
+        },
+    )
+    .unwrap();
+
     let entries = collect_paths(
         &PathBuf::from(TOP_LEVEL).join("./integration-tests/with-target/"),
         CollectPathOptions {
-            skip_patterns: skip_target(),
-            exact_skip_paths: Vec::new(),
+            skip_patterns,
+            exact_skip_paths,
             respect_ignore_files: false,
             override_respect_git_ignore: Some(false),
         },
@@ -518,15 +540,23 @@ fn test_skip_exact_paths() {
 
     // Collects manifests under `root`, with `--skip` value.
     let collect = |root: &Path, cwd: &Path, skip_paths_str: &[&str]| {
-        let skip_paths = skip_paths_str
-            .iter()
-            .map(|path| fs::canonicalize(cwd.join(path)).unwrap())
-            .collect();
+        let mut skip = skip_paths_str.into_iter().map(PathBuf::from).collect();
+
+        resolve_skip_paths(
+            cwd,
+            ResolveSkipPaths {
+                skip_target_dir: false,
+                skip_patterns: &mut Vec::new(),
+                skip: &mut skip,
+            },
+        )
+        .unwrap();
+
         collect_paths(
             root,
             CollectPathOptions {
                 skip_patterns: Vec::new(),
-                exact_skip_paths: skip_paths,
+                exact_skip_paths: skip,
                 respect_ignore_files: false,
                 override_respect_git_ignore: Some(false),
             },
@@ -606,7 +636,18 @@ fn test_skip_patterns() {
 
     // Collects manifests under `root`, with `--skip-patterns` value.
     let collect = |root: &Path, skip_patterns_str: &[&str]| -> Vec<PathBuf> {
-        let skip_patterns = skip_patterns_str.iter().map(PathBuf::from).collect();
+        let mut skip_patterns = skip_patterns_str.into_iter().map(PathBuf::from).collect();
+
+        resolve_skip_paths(
+            root,
+            ResolveSkipPaths {
+                skip_target_dir: false,
+                skip_patterns: &mut skip_patterns,
+                skip: &mut Vec::new(),
+            },
+        )
+        .unwrap();
+
         collect_paths(
             root,
             CollectPathOptions {
@@ -633,6 +674,30 @@ fn test_skip_patterns() {
         let entries = collect(&fixture, &[skip]);
         assert_eq!(entries.len(), 1, "--skip-patterns {skip}");
         assert!(!has_skipped(&entries), "--skip-patterns {skip}");
+    }
+}
+
+#[test]
+fn test_invalid_skip_patterns() {
+    let run = |skip_patterns: &[&str]| {
+        let mut skip_patterns = skip_patterns.into_iter().map(PathBuf::from).collect();
+        let cwd = PathBuf::from("unused");
+        resolve_skip_paths(
+            &cwd,
+            ResolveSkipPaths {
+                skip_target_dir: false,
+                skip_patterns: &mut skip_patterns,
+                skip: &mut Vec::new(),
+            },
+        )
+    };
+
+    let err = run(&[""]).unwrap_err();
+    assert!(err.to_string().contains("empty"));
+
+    for path in &["./current", "../parent", "/tmp"] {
+        let err = run(&[path]).unwrap_err();
+        assert!(err.to_string().contains("absolute or relative directory"));
     }
 }
 
