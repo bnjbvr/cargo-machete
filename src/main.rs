@@ -1,10 +1,12 @@
 mod discover_manifest;
+mod metadata_cache;
 mod printers;
 mod search_unused;
 
 use crate::discover_manifest::{
     CollectPathOptions, ResolveSkipPaths, collect_paths, resolve_skip_paths,
 };
+use crate::metadata_cache::MetadataCache;
 use crate::printers::json::JsonPrinter;
 use crate::printers::stdout::StdoutPrinter;
 use crate::printers::{AnalyzedPaths, Printer};
@@ -23,19 +25,6 @@ use toml_edit::{KeyMut, TableLike};
 #[cfg(all(target_env = "musl", target_pointer_width = "64"))]
 #[global_allocator]
 static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
-
-#[derive(Clone, Copy)]
-pub(crate) enum UseCargoMetadata {
-    Yes,
-    No,
-}
-
-#[cfg(test)]
-impl UseCargoMetadata {
-    fn all() -> &'static [Self] {
-        &[Self::Yes, Self::No]
-    }
-}
 
 #[derive(argh::FromArgs)]
 #[argh(description = r#"
@@ -161,6 +150,10 @@ fn run_machete() -> anyhow::Result<bool> {
         },
     )?;
 
+    // Shared across all the analyzed paths, so each workspace is resolved by cargo only once.
+    let metadata_cache = MetadataCache::default();
+    let metadata_cache = args.with_metadata.then_some(&metadata_cache);
+
     let mut has_unused_dependencies = false;
 
     // Be resilient in case we can't collect some paths due to errors: don't abort execution, so we
@@ -184,18 +177,12 @@ fn run_machete() -> anyhow::Result<bool> {
             }
         };
 
-        let with_metadata = if args.with_metadata {
-            UseCargoMetadata::Yes
-        } else {
-            UseCargoMetadata::No
-        };
-
         // Run analysis in parallel. This will spawn new rayon tasks when dependencies are effectively
         // used by any Rust crate.
         let results = manifest_path_entries
             .par_iter()
             .filter_map(
-                |manifest_path| match find_unused(manifest_path, with_metadata) {
+                |manifest_path| match find_unused(manifest_path, metadata_cache) {
                     Ok(Some(analysis)) => {
                         if analysis.unused.is_empty() {
                             None

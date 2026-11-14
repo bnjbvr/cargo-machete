@@ -1,4 +1,4 @@
-use cargo_metadata::CargoOpt;
+use anyhow::Context as _;
 use grep::{
     matcher::LineTerminator,
     regex::{RegexMatcher, RegexMatcherBuilder},
@@ -16,7 +16,7 @@ use walkdir::WalkDir;
 
 #[cfg(test)]
 use crate::TOP_LEVEL;
-use crate::UseCargoMetadata;
+use crate::metadata_cache::MetadataCache;
 
 use self::meta::PackageMetadata;
 
@@ -48,7 +48,6 @@ mod meta {
 }
 
 pub(crate) struct PackageAnalysis {
-    metadata: Option<cargo_metadata::Metadata>,
     pub manifest: cargo_toml::Manifest<meta::PackageMetadata>,
     pub package_name: String,
     pub unused: Vec<String>,
@@ -56,31 +55,13 @@ pub(crate) struct PackageAnalysis {
 }
 
 impl PackageAnalysis {
-    fn new(
-        package_name: String,
-        cargo_path: &Path,
-        manifest: cargo_toml::Manifest<meta::PackageMetadata>,
-        with_cargo_metadata: bool,
-    ) -> anyhow::Result<Self> {
-        let metadata = if with_cargo_metadata {
-            Some(
-                cargo_metadata::MetadataCommand::new()
-                    .features(CargoOpt::AllFeatures)
-                    .manifest_path(cargo_path)
-                    //.other_options(["--frozen".to_owned()]) // TODO causes errors in cargo-metadata
-                    .exec()?,
-            )
-        } else {
-            None
-        };
-
-        Ok(Self {
-            metadata,
+    fn new(package_name: String, manifest: cargo_toml::Manifest<meta::PackageMetadata>) -> Self {
+        Self {
             manifest,
             package_name,
             unused: Vec::default(),
             ignored_used: Vec::default(),
-        })
+        }
     }
 }
 
@@ -260,18 +241,25 @@ impl Search {
     }
 }
 
+struct FullManifest {
+    manifest: cargo_toml::Manifest<PackageMetadata>,
+
+    /// If the crate was part of a workspace, workspace metadata that's specific to cargo-machete,
+    /// read from `[workspace.metadata.cargo-machete]`.
+    workspace_metadata: Option<meta::MetadataFields>,
+
+    /// If the crate was part of a workspace, path to the workspace manifest.
+    workspace_manifest_path: Option<PathBuf>,
+}
+
 /// Read a manifest and try to find a workspace manifest to complete the data available in the
 /// manifest.
 ///
 /// If the current package isn't a workspace root, this will look up the file tree to find the
 /// Cargo.toml workspace manifest, assuming it's on a parent directory.
-fn get_full_manifest(
-    dir_path: &Path,
-    manifest_path: &Path,
-) -> anyhow::Result<(
-    cargo_toml::Manifest<PackageMetadata>,
-    Option<meta::MetadataFields>,
-)> {
+///
+/// Returns the completed manifest, as well as workspace info, in a [`FullManifest`].
+fn get_full_manifest(dir_path: &Path, manifest_path: &Path) -> anyhow::Result<FullManifest> {
     // HACK: we can't plain use `from_path_with_metadata` here, because it calls
     // `complete_from_path` just a bit too early (before we've had a chance to call
     // `inherit_workspace`). See https://gitlab.com/crates.rs/cargo_toml/-/issues/20 for details,
@@ -280,13 +268,14 @@ fn get_full_manifest(
     let mut manifest =
         cargo_toml::Manifest::<PackageMetadata>::from_slice_with_metadata(&cargo_toml_content)?;
 
-    let mut ws_manifest_and_path = None;
+    let mut ws_manifest = None;
+    let mut ws_path = None;
 
     if manifest.workspace.is_some() {
         // The manifest is its own workspace root, so Cargo doesn't look any further up: neither
         // should we.
-        let workspace_manifest = manifest.clone();
-        ws_manifest_and_path = Some((workspace_manifest, manifest_path.to_owned()));
+        ws_manifest = Some(manifest.clone());
+        ws_path = Some(manifest_path.to_owned());
     } else {
         // Canonicalize the path, so as to get the full "parenthood" of relative paths.
         let mut dir_path = std::fs::canonicalize(dir_path).unwrap_or_else(|err| {
@@ -304,7 +293,8 @@ fn get_full_manifest(
                 )
                 && workspace_manifest.workspace.is_some()
             {
-                ws_manifest_and_path = Some((workspace_manifest, workspace_cargo_path));
+                ws_manifest = Some(workspace_manifest);
+                ws_path = Some(workspace_cargo_path);
                 break;
             }
         }
@@ -312,110 +302,104 @@ fn get_full_manifest(
 
     manifest.complete_from_path_and_workspace(
         manifest_path,
-        ws_manifest_and_path.as_ref().map(|(m, p)| (m, p.as_path())),
+        ws_manifest
+            .as_ref()
+            .zip(ws_path.as_ref())
+            .map(|(m, p)| (m, p.as_path())),
     )?;
 
-    Ok((
+    Ok(FullManifest {
         manifest,
         // Look for `workspace.metadata.cargo-machete` custom metadata in the workspace Cargo.toml.
-        ws_manifest_and_path
-            .and_then(|(manifest, _path)| manifest.workspace?.metadata?.cargo_machete),
-    ))
+        workspace_metadata: ws_manifest
+            .and_then(|manifest| manifest.workspace?.metadata?.cargo_machete),
+        workspace_manifest_path: ws_path,
+    })
 }
 
 pub(crate) fn find_unused(
     manifest_path: &Path,
-    with_cargo_metadata: UseCargoMetadata,
+    metadata_cache: Option<&MetadataCache>,
 ) -> anyhow::Result<Option<PackageAnalysis>> {
     let mut dir_path = manifest_path.to_path_buf();
     dir_path.pop();
 
     trace!("trying to open {}...", manifest_path.display());
 
-    let (manifest, workspace_metadata) = get_full_manifest(&dir_path, manifest_path)?;
+    let full_manifest = get_full_manifest(&dir_path, manifest_path)?;
 
-    let package_name = match manifest.package {
+    let package_name = match full_manifest.manifest.package {
         Some(ref package) => package.name.clone(),
         None => return Ok(None),
     };
 
     debug!("handling {} ({})", package_name, dir_path.display());
 
-    let mut analysis = PackageAnalysis::new(
-        package_name,
-        manifest_path,
-        manifest,
-        matches!(with_cargo_metadata, UseCargoMetadata::Yes),
-    )?;
+    let mut analysis = PackageAnalysis::new(package_name, full_manifest.manifest);
 
     let paths = collect_paths(&dir_path, &analysis);
 
     // TODO extend to dev dependencies + build dependencies, and be smarter in the grouping of
-    // searched paths
-    // Maps dependency name (the name of the key in the Cargo.toml dependency
-    // table, can have dashes, not necessarily the name in the crate registry)
-    // to crate name (extern crate, snake case)
-    let dependencies: BTreeMap<String, String> = if let Some((metadata, resolve)) = analysis
-        .metadata
-        .as_ref()
-        .and_then(|metadata| metadata.resolve.as_ref().map(|resolve| (metadata, resolve)))
-    {
-        if let Some(ref root) = resolve.root {
-            // This gives us resolved dependencies, in crate form
-            let root_node = resolve
-                .nodes
-                .iter()
-                .find(|node| node.id == *root)
-                .expect("root should be resolved by cargo-metadata");
-            // This gives us the original dependency table
-            // May have more than resolved if some were never enabled
-            let root_package = metadata
-                .packages
-                .iter()
-                .find(|pkg| pkg.id == *root)
-                .expect("root should appear under cargo-metadata packages");
-            // For every resolved dependency:
-            // look it up in the package list to find the name (the one in registries)
-            // look up that name in dependencies of the root_package;
-            // find if it uses a different key through the rename field
-            root_node
-                .deps
-                .iter()
-                .map(|dep| {
-                    let crate_name = dep.name.clone();
-                    let dep_pkg = metadata
-                        .packages
-                        .iter()
-                        .find(|pkg| pkg.id == dep.pkg)
-                        .expect(
-                            "resolved dependencies should appear under cargo-metadata packages",
-                        );
+    // searched paths.
 
-                    let mut dep_spec_it = root_package
-                        .dependencies
-                        .iter()
-                        .filter(|dep_spec| dep_spec.name == *dep_pkg.name);
+    // Maps dependency name (the name of the key in the Cargo.toml dependency table, can have
+    // dashes, not necessarily the name in the crate registry) to crate name (extern crate, snake
+    // case).
+    let dependencies: BTreeMap<String, String> = if let Some(cache) = metadata_cache {
+        // The metadata is shared by all the crates in the same workspace, so the analyzed
+        // package isn't necessarily the root of the resolved graph.
+        let (package_id, metadata) = cache.get(
+            manifest_path,
+            full_manifest
+                .workspace_manifest_path
+                .as_deref()
+                .unwrap_or(manifest_path),
+        )?;
 
-                    // The dependency can appear more than once, for example if it is both
-                    // a dependency and a dev-dependency (often with more features enabled).
-                    // We'll assume cargo enforces consistency.
-                    let dep_spec = dep_spec_it
-                        .next()
-                        .expect("resolved dependency should have a matching dependency spec");
+        // This gives us resolved dependencies, in crate form.
+        let node = metadata
+            .node(&package_id)
+            .context("package should be resolved by cargo-metadata")?;
+        //
+        // This gives us the original dependency table.
+        // May have more than resolved if some were never enabled.
+        let package = metadata
+            .package(&package_id)
+            .context("package should appear under cargo-metadata packages")?;
 
-                    // If the dependency was renamed, through key = { package = … },
-                    // the original key is in dep_spec.rename.
-                    let dep_key = dep_spec
-                        .rename
-                        .clone()
-                        .unwrap_or_else(|| dep_spec.name.clone());
-                    (dep_key, crate_name)
-                })
-                .collect()
-        } else {
-            // No root -> virtual workspace, empty map
-            Default::default()
-        }
+        // For every resolved dependency:
+        // - look it up in the package list to find the name (the one in registries)
+        // - look up that name in dependencies of the package;
+        // - find if it uses a different key through the rename field.
+        node.deps
+            .iter()
+            .map(|dep| {
+                let crate_name = dep.name.clone();
+                let dep_pkg = metadata
+                    .package(&dep.pkg)
+                    .expect("resolved dependencies should appear under cargo-metadata packages");
+
+                let mut dep_spec_it = package
+                    .dependencies
+                    .iter()
+                    .filter(|dep_spec| dep_spec.name == *dep_pkg.name);
+
+                // The dependency can appear more than once, for example if it is both a dependency
+                // and a dev-dependency (often with more features enabled). We'll assume cargo
+                // enforces consistency.
+                let dep_spec = dep_spec_it
+                    .next()
+                    .expect("resolved dependency should have a matching dependency spec");
+
+                // If the dependency was renamed, through key = { package = … }, the original key is
+                // in dep_spec.rename.
+                let dep_key = dep_spec
+                    .rename
+                    .clone()
+                    .unwrap_or_else(|| dep_spec.name.clone());
+                (dep_key, crate_name)
+            })
+            .collect()
     } else {
         analysis
             .manifest
@@ -436,11 +420,12 @@ pub(crate) fn find_unused(
         .map(|meta| meta.ignored.iter().collect::<HashSet<_>>())
         .unwrap_or_default();
 
-    // Keep a list of renamed dependencies
+    // Keep a list of renamed dependencies.
     static NO_RENAMED: BTreeMap<Box<str>, Box<str>> = BTreeMap::new();
     let renamed = meta.map(|meta| &meta.renamed).unwrap_or(&NO_RENAMED);
 
-    let (workspace_ignored, workspace_renamed): (HashSet<_>, _) = workspace_metadata
+    let (workspace_ignored, workspace_renamed): (HashSet<_>, _) = full_manifest
+        .workspace_metadata
         .map(|MetadataFields { ignored, renamed }| (HashSet::from_iter(ignored), renamed))
         .unwrap_or_default();
 
@@ -778,13 +763,11 @@ pub use {
 
 #[cfg(test)]
 fn check_analysis<F: Fn(PackageAnalysis)>(rel_path: &str, callback: F) {
-    for use_cargo_metadata in UseCargoMetadata::all() {
-        let analysis = find_unused(
-            &PathBuf::from(TOP_LEVEL).join(rel_path),
-            *use_cargo_metadata,
-        )
-        .expect("find_unused must return an Ok result")
-        .expect("no error during processing");
+    let cache = MetadataCache::default();
+    for metadata_cache in [None, Some(&cache)] {
+        let analysis = find_unused(&PathBuf::from(TOP_LEVEL).join(rel_path), metadata_cache)
+            .expect("find_unused must return an Ok result")
+            .expect("no error during processing");
         callback(analysis);
     }
 }
@@ -865,7 +848,7 @@ fn test_renamed_field_works() -> anyhow::Result<()> {
     // happens in the crate manifest
     let analysis = find_unused(
         &PathBuf::from(TOP_LEVEL).join("./integration-tests/renamed-dep/Cargo.toml"),
-        UseCargoMetadata::No,
+        None,
     )?
     .expect("no error during processing");
     assert_eq!(analysis.unused.as_slice(), &["bytes", "log"]);
@@ -879,7 +862,7 @@ fn test_renamed_field_workspace_works() -> anyhow::Result<()> {
     let analysis = find_unused(
         &PathBuf::from(TOP_LEVEL)
             .join("./integration-tests/renamed-dep-workspace/inner/Cargo.toml"),
-        UseCargoMetadata::No,
+        None,
     )?
     .expect("no error during processing");
     assert_eq!(analysis.unused.as_slice(), &["bytes", "flagset"]);
@@ -892,7 +875,7 @@ fn test_crate_renaming_works() -> anyhow::Result<()> {
     // positives.
     let analysis = find_unused(
         &PathBuf::from(TOP_LEVEL).join("./integration-tests/renaming-works/Cargo.toml"),
-        UseCargoMetadata::Yes,
+        Some(&MetadataCache::default()),
     )?
     .expect("no error during processing");
     assert!(analysis.unused.is_empty());
@@ -900,7 +883,7 @@ fn test_crate_renaming_works() -> anyhow::Result<()> {
     // But when not using cargo-metadata, there's a false positive!
     let analysis = find_unused(
         &PathBuf::from(TOP_LEVEL).join("./integration-tests/renaming-works/Cargo.toml"),
-        UseCargoMetadata::No,
+        None,
     )?
     .expect("no error during processing");
     assert_eq!(analysis.unused, &["xml-rs".to_string()]);
@@ -914,7 +897,7 @@ fn test_unused_renamed_in_registry() -> anyhow::Result<()> {
     // cargo-machete reports the unused spec properly.
     let analysis = find_unused(
         &PathBuf::from(TOP_LEVEL).join("./integration-tests/unused-renamed-in-registry/Cargo.toml"),
-        UseCargoMetadata::Yes,
+        Some(&MetadataCache::default()),
     )?
     .expect("no error during processing");
     assert_eq!(analysis.unused, &["xml-rs".to_string()]);
@@ -928,7 +911,7 @@ fn test_unused_renamed_in_spec() -> anyhow::Result<()> {
     // cargo-machete reports the unused spec properly.
     let analysis = find_unused(
         &PathBuf::from(TOP_LEVEL).join("./integration-tests/unused-renamed-in-spec/Cargo.toml"),
-        UseCargoMetadata::Yes,
+        Some(&MetadataCache::default()),
     )?
     .expect("no error during processing");
     assert_eq!(analysis.unused, &["tracing".to_string()]);
@@ -941,7 +924,7 @@ fn test_unused_kebab_spec() -> anyhow::Result<()> {
     // when a lib uses kebab naming, cargo-machete reports the unused spec properly.
     let analysis = find_unused(
         &PathBuf::from(TOP_LEVEL).join("./integration-tests/unused-kebab-spec/Cargo.toml"),
-        UseCargoMetadata::Yes,
+        Some(&MetadataCache::default()),
     )?
     .expect("no error during processing");
     assert_eq!(analysis.unused, &["log-once".to_string()]);
@@ -985,7 +968,7 @@ fn test_workspace_from_relative_path() {
     .unwrap();
 
     let path = Path::new("./Cargo.toml");
-    let analysis = find_unused(path, UseCargoMetadata::No);
+    let analysis = find_unused(path, None);
 
     // Reset the current directory *before* running any other check.
     set_current_dir(prev_cwd).unwrap();
@@ -1014,10 +997,75 @@ fn test_nested_workspace_root() {
 fn test_multi_key_dep() {
     let analysis = find_unused(
         &PathBuf::from(TOP_LEVEL).join("./integration-tests/multi-key-dep/Cargo.toml"),
-        UseCargoMetadata::Yes,
+        Some(&MetadataCache::default()),
     )
     .expect("find_unused must return an Ok result")
     .expect("no error during processing");
 
     assert_eq!(analysis.unused, &["cc".to_string(), "rand".to_string()]);
+}
+
+#[test]
+fn test_workspace_members_share_metadata() {
+    // All the members of a workspace reuse the result of a single `cargo metadata` call.
+    use std::sync::atomic::Ordering;
+
+    let cache = MetadataCache::default();
+    let analyze = |rel_path: &str| {
+        find_unused(&PathBuf::from(TOP_LEVEL).join(rel_path), Some(&cache))
+            .expect("find_unused must return an Ok result")
+            .expect("no error during processing")
+    };
+
+    let unused = analyze("./integration-tests/multi-crate-workspace/unused/Cargo.toml");
+    assert_eq!(unused.unused, &["log".to_string()]);
+
+    // xml-rs is imported as `xml`: only resolved properly thanks to the metadata.
+    let renamed = analyze("./integration-tests/multi-crate-workspace/renamed/Cargo.toml");
+    assert!(renamed.unused.is_empty());
+
+    assert_eq!(cache.num_cargo_calls.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn test_excluded_nested_workspace_gets_own_metadata() {
+    // `nested-workspace-root` is a workspace with a single member, `member`. It also contains
+    // `inner`, which is excluded from that workspace and is its own workspace root. Despite one
+    // being nested in the other's directory, they're two distinct workspaces: none must reuse the
+    // metadata of the other.
+    use std::sync::atomic::Ordering;
+
+    const MEMBER: &str = "./integration-tests/nested-workspace-root/member/Cargo.toml";
+    const INNER: &str = "./integration-tests/nested-workspace-root/inner/Cargo.toml";
+
+    let unused = |cache: &MetadataCache, rel_path: &str| {
+        find_unused(&PathBuf::from(TOP_LEVEL).join(rel_path), Some(cache))
+            .expect("find_unused must return an Ok result")
+            .expect("no error during processing")
+            .unused
+    };
+
+    let expected = |rel_path: &str| match rel_path {
+        MEMBER => vec!["log-once".to_string()],
+        INNER => vec!["log".to_string()],
+        _ => unreachable!(),
+    };
+
+    // The content of the cache depends on which crate triggered the call to cargo-metadata, so
+    // try both orders.
+    for (first, second) in [(MEMBER, INNER), (INNER, MEMBER)] {
+        let cache = MetadataCache::default();
+
+        assert_eq!(unused(&cache, first), expected(first));
+        assert_eq!(cache.num_cargo_calls.load(Ordering::SeqCst), 1);
+
+        // The other crate isn't in the same workspace: it needs its own metadata.
+        assert_eq!(unused(&cache, second), expected(second));
+        assert_eq!(cache.num_cargo_calls.load(Ordering::SeqCst), 2);
+
+        // Each workspace is now cached.
+        assert_eq!(unused(&cache, first), expected(first));
+        assert_eq!(unused(&cache, second), expected(second));
+        assert_eq!(cache.num_cargo_calls.load(Ordering::SeqCst), 2);
+    }
 }
