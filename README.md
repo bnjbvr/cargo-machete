@@ -208,6 +208,9 @@ Add the following to your `.pre-commit-config.yaml`:
 
 ## Contributing
 
+We're using [`Justfile`](https://just.systems/man/en/) for common development tasks. Run `just -l`
+to get a list of available recipes, or `just` to run the same commands as in CI.
+
 [![Contributor Covenant](https://img.shields.io/badge/contributor%20covenant-v1.4-ff69b4.svg)](https://www.contributor-covenant.org/version/1/4/code-of-conduct/)
 
 We welcome community contributions to this project.
