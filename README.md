@@ -55,30 +55,30 @@ This can be used in CI situations.
 
 ### Skipping directories
 
-By default cargo-machete descends into every subdirectory looking for `Cargo.toml` files. If you
-have crates you don't want analyzed — for example a `tests` directory full of small standalone
-fixture crates that intentionally carry unused dependencies — you can prune them from the walk with
-`--skip`:
+By default cargo-machete descends into every subdirectory from the given root paths (or `.` if none
+is given), looking for `Cargo.toml` files.
+
+If you have crates you don't want analyzed (e.g., a `tests` directory full of small standalone
+fixture crates that intentionally carry unused dependencies) you can prune them either
+individually, using their absolute or relative path, with `--skip`; or skip an entire pattern of
+paths that end with a given component `--skip-patterns` (e.g. `--skip-patterns target` will skip
+all the paths which last component is `target`, but not e.g. `end-target`).
+
+As a shorthand for the most common use case, there is also `--skip-targets` (equivalent to
+`--skip-patterns target`) which skips all the `target` directories found during walking the input
+paths.
 
 ```bash
 # skip every `tests` directory found
+cargo machete --skip-patterns tests
+
+# skip only the `./tests` directory
 cargo machete --skip tests
+# or equivalently
+cargo machete --skip ./tests
 
-# --skip can be passed multiple times
-cargo machete --skip tests --skip examples
-```
-
-How a `--skip` path is matched depends on its form:
-
-- A plain relative path matches on trailing path components, the same way `--skip-target-dir`
-  matches `target/`: `--skip crates/foo` skips any directory whose path ends with `crates/foo`. A
-  leading `./` is ignored, so `--skip ./tests` and `--skip tests` behave identically.
-- An absolute path, or a relative path containing `..`, is resolved against the current directory
-  and skips exactly that directory. It's an error if it doesn't exist.
-
-```bash
-# from `my-repo/tools`, analyze the whole repository except `my-repo/tests`
-cargo machete --skip ../tests ..
+# those can be passed multiple times
+cargo machete --skip-patterns tests --skip examples
 ```
 
 Note that options must come before the paths to analyze: anything after the first path is treated
