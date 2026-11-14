@@ -36,12 +36,12 @@ impl Printer for StdoutPrinter {
             }
             AnalyzedPaths::Paths(path_bufs) => {
                 println!(
-                    "Analyzing dependencies of crates in {}...",
+                    "Analyzing dependencies of crates in '{}'...",
                     path_bufs
                         .iter()
-                        .map(|path| path.as_os_str().to_string_lossy().to_string())
+                        .map(|path| path.as_os_str().to_string_lossy())
                         .collect::<Vec<_>>()
-                        .join(", ")
+                        .join("', '")
                 );
             }
         }
