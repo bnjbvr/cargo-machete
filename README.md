@@ -105,6 +105,11 @@ ignored = ["prost"]
 ignored = ["prost"]
 ```
 
+Build dependencies (`[build-dependencies]`) are only searched for in the build script file
+itself (`build.rs` by default). Modules that the build script loads with `mod` statements are not
+followed, so a build dependency that is only used in such a module is reported as unused: list it
+in `ignored` as shown above.
+
 If there are too many false positives, consider using the `--with-metadata` CLI
 flag, which will call `cargo metadata --all-features` to find final dependency
 names, more accurate dependencies per build type, etc. ⚠ This may modify the

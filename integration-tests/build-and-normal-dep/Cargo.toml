@@ -1,0 +1,18 @@
+[package]
+name = "build-and-normal-dep"
+version = "0.1.0"
+edition = "2021"
+
+# Every crate is declared in both tables, and must be analyzed separately in each.
+[dependencies]
+# Unused anywhere: reported in both tables.
+cfg-if = "1.0.0"
+# Used in src/main.rs only: reported as a build dependency.
+log = "0.4.14"
+# Used in build.rs only: reported as a normal dependency.
+rand = "0.8.5"
+
+[build-dependencies]
+cfg-if = "1.0.0"
+log = "0.4.14"
+rand = "0.8.5"

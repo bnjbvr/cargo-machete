@@ -48,10 +48,59 @@ mod meta {
     }
 }
 
+/// The group of dependency tables a dependency is declared in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DepKind {
+    /// `[dependencies]` or `[dev-dependencies]`, including their target-specific variants.
+    Normal,
+    /// `[build-dependencies]`, including its target-specific variants.
+    Build,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct UnusedDep {
+    pub name: String,
+    /// A crate can be declared both as a normal and a build dependency, and be unused in only one
+    /// of them: `--fix` must only remove it from the tables of this kind.
+    pub kind: DepKind,
+}
+
+/// Lets the tests that don't care about the kind of a dependency compare names only.
+#[cfg(test)]
+impl PartialEq<String> for UnusedDep {
+    fn eq(&self, other: &String) -> bool {
+        self.name == *other
+    }
+}
+
+#[cfg(test)]
+impl PartialEq<&str> for UnusedDep {
+    fn eq(&self, other: &&str) -> bool {
+        self.name == *other
+    }
+}
+
+#[cfg(test)]
+impl UnusedDep {
+    fn build(name: &str) -> Self {
+        Self {
+            name: name.to_owned(),
+            kind: DepKind::Build,
+        }
+    }
+
+    fn normal(name: &str) -> Self {
+        Self {
+            name: name.to_owned(),
+            kind: DepKind::Normal,
+        }
+    }
+}
+
 pub(crate) struct PackageAnalysis {
     pub manifest: cargo_toml::Manifest<meta::PackageMetadata>,
     pub package_name: String,
-    pub unused: Vec<String>,
+    pub unused: Vec<UnusedDep>,
     pub ignored_used: Vec<String>,
 }
 
@@ -446,34 +495,35 @@ pub(crate) fn find_unused(
                     .package(&dep.pkg)
                     .expect("resolved dependencies should appear under cargo-metadata packages");
 
-                let mut dep_spec_it = package
-                    .dependencies
-                    .iter()
-                    .filter(|dep_spec| dep_spec.name == *dep_pkg.name);
+                let dep_key = |is_build: bool| {
+                    // The dependency can appear more than once, for example if it is both a
+                    // dependency and a dev-dependency (often with more features enabled). We'll
+                    // assume cargo enforces consistency.
+                    let dep_spec = package
+                        .dependencies
+                        .iter()
+                        .find(|dep_spec| {
+                            dep_spec.name == *dep_pkg.name
+                                && (dep_spec.kind == DependencyKind::Build) == is_build
+                        })
+                        .expect("resolved dependency should have a matching dependency spec");
 
-                // The dependency can appear more than once, for example if it is both a dependency
-                // and a dev-dependency (often with more features enabled). We'll assume cargo
-                // enforces consistency.
-                let dep_spec = dep_spec_it
-                    .next()
-                    .expect("resolved dependency should have a matching dependency spec");
+                    // If the dependency was renamed, through key = { package = … }, the original
+                    // key is in dep_spec.rename.
+                    dep_spec
+                        .rename
+                        .clone()
+                        .unwrap_or_else(|| dep_spec.name.clone())
+                };
 
-                // If the dependency was renamed, through key = { package = … }, the original key is
-                // in dep_spec.rename.
-                let dep_key = dep_spec
-                    .rename
-                    .clone()
-                    .unwrap_or_else(|| dep_spec.name.clone());
-
-                // Classify by kind: build deps go into build_deps, others into normal_deps.
-                let is_build_only = dep
-                    .dep_kinds
-                    .iter()
-                    .all(|k| k.kind == DependencyKind::Build);
-                if is_build_only {
-                    build_deps.insert(dep_key, crate_name);
-                } else {
-                    normal_deps.insert(dep_key, crate_name);
+                // A crate declared both as a normal and a build dependency is resolved once, with
+                // one entry per kind: analyze it separately for each group of tables.
+                let kinds = || dep.dep_kinds.iter().map(|k| k.kind);
+                if kinds().any(|kind| kind != DependencyKind::Build) {
+                    normal_deps.insert(dep_key(false), crate_name.clone());
+                }
+                if kinds().any(|kind| kind == DependencyKind::Build) {
+                    build_deps.insert(dep_key(true), crate_name);
                 }
             }
             (normal_deps, build_deps)
@@ -530,7 +580,10 @@ pub(crate) fn find_unused(
 
     for result in results {
         match result {
-            SingleDepResult::Unused(dep) => analysis.unused.push(dep),
+            SingleDepResult::Unused(name) => analysis.unused.push(UnusedDep {
+                name,
+                kind: DepKind::Normal,
+            }),
             SingleDepResult::IgnoredButUsed(dep) => analysis.ignored_used.push(dep),
         }
     }
@@ -559,8 +612,16 @@ pub(crate) fn find_unused(
 
         for result in build_results {
             match result {
-                SingleDepResult::Unused(dep) => analysis.unused.push(dep),
-                SingleDepResult::IgnoredButUsed(dep) => analysis.ignored_used.push(dep),
+                SingleDepResult::Unused(name) => analysis.unused.push(UnusedDep {
+                    name,
+                    kind: DepKind::Build,
+                }),
+                SingleDepResult::IgnoredButUsed(dep) => {
+                    // Already reported if it's also used as a normal dependency.
+                    if !analysis.ignored_used.contains(&dep) {
+                        analysis.ignored_used.push(dep);
+                    }
+                }
             }
         }
     }
@@ -1155,7 +1216,25 @@ fn test_build_dep_used_in_build_script() {
     check_analysis(
         "./integration-tests/build-dep-used/Cargo.toml",
         |analysis| {
-            assert_eq!(analysis.unused, &["rand".to_string()]);
+            assert_eq!(analysis.unused, &[UnusedDep::build("rand")]);
+        },
+    );
+}
+
+#[test]
+fn test_build_and_normal_dep_analyzed_per_table() {
+    check_analysis(
+        "./integration-tests/build-and-normal-dep/Cargo.toml",
+        |analysis| {
+            assert_eq!(
+                analysis.unused,
+                &[
+                    UnusedDep::normal("cfg-if"),
+                    UnusedDep::normal("rand"),
+                    UnusedDep::build("cfg-if"),
+                    UnusedDep::build("log"),
+                ]
+            );
         },
     );
 }

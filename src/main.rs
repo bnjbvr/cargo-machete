@@ -10,7 +10,7 @@ use crate::metadata_cache::MetadataCache;
 use crate::printers::json::JsonPrinter;
 use crate::printers::stdout::StdoutPrinter;
 use crate::printers::{AnalyzedPaths, Printer};
-use crate::search_unused::find_unused;
+use crate::search_unused::{DepKind, UnusedDep, find_unused};
 use anyhow::{Context, bail};
 use rayon::prelude::*;
 use std::env::current_dir;
@@ -270,14 +270,22 @@ fn get_dependency_tables(
     Ok(matched_tables)
 }
 
-fn remove_dependencies(manifest: &str, dependency_list: &[String]) -> anyhow::Result<String> {
+fn remove_dependencies(manifest: &str, dependency_list: &[UnusedDep]) -> anyhow::Result<String> {
     let mut manifest = toml_edit::DocumentMut::from_str(manifest)?;
 
     let mut matched_tables = get_dependency_tables(manifest.iter_mut(), true)?;
 
-    for dep in dependency_list {
+    let table_kind = |name: &KeyMut<'_>| match name.get() {
+        "build-dependencies" => DepKind::Build,
+        _ => DepKind::Normal,
+    };
+
+    for UnusedDep { name: dep, kind } in dependency_list {
         let mut removed_one = false;
         for (name, table) in &mut matched_tables {
+            if table_kind(name) != *kind {
+                continue;
+            }
             if table.remove(dep).is_some() {
                 removed_one = true;
                 log::debug!("removed {name}.{dep}");
@@ -288,6 +296,7 @@ fn remove_dependencies(manifest: &str, dependency_list: &[String]) -> anyhow::Re
         if !removed_one {
             let tables = matched_tables
                 .iter()
+                .filter(|(name, _)| table_kind(name) == *kind)
                 .map(|(k, _)| k.to_string())
                 .collect::<Vec<String>>()
                 .join(", ");
@@ -320,7 +329,20 @@ fn test_remove_dependencies() {
     let manifest = PathBuf::from(TOP_LEVEL).join("./integration-tests/multi-key-dep/Cargo.toml");
     let stripped_manifest = remove_dependencies(
         &std::fs::read_to_string(manifest).unwrap(),
-        &["cc".to_string(), "log-once".to_string(), "rand".to_string()],
+        &[
+            UnusedDep {
+                name: "cc".to_string(),
+                kind: DepKind::Normal,
+            },
+            UnusedDep {
+                name: "log-once".to_string(),
+                kind: DepKind::Normal,
+            },
+            UnusedDep {
+                name: "rand".to_string(),
+                kind: DepKind::Build,
+            },
+        ],
     )
     .unwrap();
     assert_eq!(
@@ -340,4 +362,39 @@ log = "0.4.14"
 [build-dependencies]
 "#
     );
+}
+
+#[test]
+fn test_remove_dependencies_only_from_matching_tables() {
+    let manifest =
+        PathBuf::from(TOP_LEVEL).join("./integration-tests/build-and-normal-dep/Cargo.toml");
+    let unused = |name: &str, kind| UnusedDep {
+        name: name.to_string(),
+        kind,
+    };
+
+    // `cfg-if` is listed twice, once per kind: removing it from the first kind of tables must
+    // not make the second removal fail.
+    let stripped_manifest = remove_dependencies(
+        &std::fs::read_to_string(manifest).unwrap(),
+        &[
+            unused("cfg-if", DepKind::Normal),
+            unused("rand", DepKind::Normal),
+            unused("cfg-if", DepKind::Build),
+            unused("log", DepKind::Build),
+        ],
+    )
+    .unwrap();
+
+    let stripped_manifest = toml_edit::DocumentMut::from_str(&stripped_manifest).unwrap();
+    let keys = |table: &str| {
+        stripped_manifest[table]
+            .as_table()
+            .unwrap()
+            .iter()
+            .map(|(key, _)| key)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(keys("dependencies"), ["log"]);
+    assert_eq!(keys("build-dependencies"), ["rand"]);
 }

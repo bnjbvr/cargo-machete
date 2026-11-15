@@ -67,10 +67,18 @@ impl Printer for JsonPrinter {
 
         // Collect results for JSON output.
         for (analysis, path) in results {
+            // A crate unused both as a normal and a build dependency is listed once.
+            let mut unused: Vec<String> = Vec::with_capacity(analysis.unused.len());
+            for dep in &analysis.unused {
+                if !unused.contains(&dep.name) {
+                    unused.push(dep.name.clone());
+                }
+            }
+
             json_output.crates.push(CrateUnusedDeps {
                 package_name: analysis.package_name.clone(),
                 manifest_path: path.to_string_lossy().to_string(),
-                unused: analysis.unused.clone(),
+                unused,
                 ignored_used: analysis.ignored_used.clone(),
             });
         }
