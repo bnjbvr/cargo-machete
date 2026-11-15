@@ -1,5 +1,10 @@
 # unreleased
 
+# 0.10.1 (released on 2026-11-15)
+
+- Fixed release build of `cargo-machete` on MacOS (#293).
+- Fixed Github action download on linux aarch64, now that it's using musl (#291).
+
 # 0.10.0 (released on 2026-11-14)
 
 - Performance improvement: with `--with-metadata`, run `cargo metadata` once per workspace instead
