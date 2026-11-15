@@ -1,5 +1,9 @@
 # unreleased
 
+- Added: analyze build dependencies by searching for them in the build script. With `--fix`, a
+  crate declared both as a normal and a build dependency is only removed from the tables where
+  it's unused (#127).
+
 # 0.10.1 (released on 2026-11-15)
 
 - Fixed release build of `cargo-machete` on MacOS (#293).

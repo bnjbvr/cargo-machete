@@ -9,7 +9,7 @@ use std::{
 
 use crate::{
     printers::{AnalyzedPaths, Printer},
-    search_unused::PackageAnalysis,
+    search_unused::{DepKind, PackageAnalysis},
 };
 
 pub struct StdoutPrinter {
@@ -70,7 +70,10 @@ impl Printer for StdoutPrinter {
         for (analysis, path) in results {
             println!("{} -- {}:", analysis.package_name, path.to_string_lossy());
             for dep in &analysis.unused {
-                println!("\t{dep}");
+                match dep.kind {
+                    DepKind::Normal => println!("\t{}", dep.name),
+                    DepKind::Build => println!("\t{} (build-dependencies)", dep.name),
+                }
             }
 
             for dep in &analysis.ignored_used {
