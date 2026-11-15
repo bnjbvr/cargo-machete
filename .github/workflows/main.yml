@@ -121,11 +121,11 @@ jobs:
             rust: stable
             target: x86_64-pc-windows-msvc
             bin: cargo-machete.exe
-          - os: macos-14
+          - os: macos-15
             rust: stable
             target: x86_64-apple-darwin
             bin: cargo-machete
-          - os: macos-14
+          - os: macos-15
             rust: stable
             target: aarch64-apple-darwin
             bin: cargo-machete
