@@ -451,8 +451,7 @@ pub(crate) fn find_unused(
         .manifest
         .package
         .as_ref()
-        .and_then(|pkg| pkg.build.as_ref())
-        .and_then(|build| build.as_path())
+        .and_then(|pkg| pkg.build.as_ref()?.as_path())
         .map(|p| dir_path.join(p));
 
     // TODO extend to dev dependencies, and be smarter in the grouping of searched paths.
