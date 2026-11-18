@@ -6,7 +6,7 @@ use serde::Serialize;
 
 use crate::{
     printers::{AnalyzedPaths, Printer},
-    search_unused::PackageAnalysis,
+    search_unused::{DepKind, PackageAnalysis},
 };
 
 pub struct JsonPrinter;
@@ -42,8 +42,10 @@ impl Printer for JsonPrinter {
             package_name: String,
             /// Path to the Cargo.toml file.
             manifest_path: String,
-            /// List of unused dependency names.
+            /// List of unused dependency names, from `[dependencies]` and `[dev-dependencies]`.
             unused: Vec<String>,
+            /// List of unused dependency names, from `[build-dependencies]`.
+            unused_build: Vec<String>,
             /// List of dependencies marked as ignored but actually used.
             ignored_used: Vec<String>,
         }
@@ -67,18 +69,20 @@ impl Printer for JsonPrinter {
 
         // Collect results for JSON output.
         for (analysis, path) in results {
-            // A crate unused both as a normal and a build dependency is listed once.
-            let mut unused: Vec<String> = Vec::with_capacity(analysis.unused.len());
-            for dep in &analysis.unused {
-                if !unused.contains(&dep.name) {
-                    unused.push(dep.name.clone());
-                }
-            }
+            let unused_of_kind = |kind: DepKind| {
+                analysis
+                    .unused
+                    .iter()
+                    .filter(|dep| dep.kind == kind)
+                    .map(|dep| dep.name.clone())
+                    .collect()
+            };
 
             json_output.crates.push(CrateUnusedDeps {
                 package_name: analysis.package_name.clone(),
                 manifest_path: path.to_string_lossy().to_string(),
-                unused,
+                unused: unused_of_kind(DepKind::Normal),
+                unused_build: unused_of_kind(DepKind::Build),
                 ignored_used: analysis.ignored_used.clone(),
             });
         }

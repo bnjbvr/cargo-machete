@@ -156,8 +156,11 @@ $ cargo machete --json ./integration-tests/with-bench/
 
 # When some unused dependencies or ignored-unused dependencies are found:
 $ cargo machete --json ./integration-tests/just-unused/
-$ {"crates":[{"package_name":"just-unused","manifest_path":"./integration-tests/just-unused/Cargo.toml","unused":["log"],"ignored_used":[]}]}
+$ {"crates":[{"package_name":"just-unused","manifest_path":"./integration-tests/just-unused/Cargo.toml","unused":["log"],"unused_build":[],"ignored_used":[]}]}
 ```
+
+`unused` lists the unused dependencies from `[dependencies]` and `[dev-dependencies]`, and
+`unused_build` the ones from `[build-dependencies]`. A crate can appear in both lists.
 
 ## Docker Image
 

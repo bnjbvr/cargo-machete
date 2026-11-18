@@ -398,3 +398,41 @@ fn test_remove_dependencies_only_from_matching_tables() {
     assert_eq!(keys("dependencies"), ["log"]);
     assert_eq!(keys("build-dependencies"), ["rand"]);
 }
+
+#[test]
+fn test_remove_dependencies_from_target_specific_build_tables() {
+    let manifest = r#"
+[dependencies]
+log = "0.4.14"
+
+[target.'cfg(unix)'.dependencies]
+log = "0.4.14"
+
+[target.'cfg(unix)'.build-dependencies]
+log = "0.4.14"
+rand = "0.8.5"
+"#;
+
+    let stripped_manifest = remove_dependencies(
+        manifest,
+        &[UnusedDep {
+            name: "log".to_string(),
+            kind: DepKind::Build,
+        }],
+    )
+    .unwrap();
+
+    let stripped_manifest = toml_edit::DocumentMut::from_str(&stripped_manifest).unwrap();
+    fn keys(table: &toml_edit::Item) -> Vec<&str> {
+        table
+            .as_table()
+            .unwrap()
+            .iter()
+            .map(|(key, _)| key)
+            .collect()
+    }
+    let unix = &stripped_manifest["target"]["cfg(unix)"];
+    assert_eq!(keys(&stripped_manifest["dependencies"]), ["log"]);
+    assert_eq!(keys(&unix["dependencies"]), ["log"]);
+    assert_eq!(keys(&unix["build-dependencies"]), ["rand"]);
+}
