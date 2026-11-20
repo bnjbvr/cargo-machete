@@ -84,6 +84,32 @@ cargo machete --skip-patterns tests --skip examples
 Note that options must come before the paths to analyze: anything after the first path is treated
 as another path.
 
+### Workspace dependencies
+
+`cargo-machete` also reports entries of a `[workspace.dependencies]` table that no member of the
+workspace inherits with `{ workspace = true }`:
+
+```
+cargo-machete found the following unused dependencies in this directory:
+workspace -- ./Cargo.toml:
+	zip
+```
+
+Such an entry is invisible to Cargo — it never enters the dependency graph — so it can outlive the
+last crate that used it without anything noticing.
+
+A dependency that *is* inherited is considered used here, even if the member inheriting it doesn't
+use it in its source; that stays a finding against the member. So after `--fix` removes the last
+inheritor, a second run is needed to report the workspace entry itself.
+
+Workspace membership is taken from `cargo metadata --no-deps`, so this requires `cargo` to be
+available. The report is skipped for a workspace whose members weren't all analyzed — running
+against a single member of a larger workspace, or skipping some members with `--skip` or
+`--skip-patterns` — since the missing members are exactly the ones that might inherit. Set
+`RUST_LOG=warn` to see when this happens.
+
+`ignored` in `[workspace.metadata.cargo-machete]` silences these entries too, see below.
+
 ### False positives
 
 To ignore a certain set of dependencies in a crate, add
@@ -156,7 +182,11 @@ $ cargo machete --json ./integration-tests/with-bench/
 
 # When some unused dependencies or ignored-unused dependencies are found:
 $ cargo machete --json ./integration-tests/just-unused/
-$ {"crates":[{"package_name":"just-unused","manifest_path":"./integration-tests/just-unused/Cargo.toml","unused":["log"],"unused_build":[],"ignored_used":[]}]}
+$ {"crates":[{"package_name":"just-unused","manifest_path":"./integration-tests/just-unused/Cargo.toml","unused":["log"],"unused_build":[],"ignored_used":[]}],"workspaces":[]}
+
+# Unused `[workspace.dependencies]` entries are reported under `workspaces`:
+$ cargo machete --json ./integration-tests/unused-workspace-dep/
+$ {"crates":[],"workspaces":[{"manifest_path":"./integration-tests/unused-workspace-dep/Cargo.toml","unused":["rand"]}]}
 ```
 
 `unused` lists the unused dependencies from `[dependencies]` and `[dev-dependencies]`, and
